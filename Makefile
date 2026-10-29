@@ -28,12 +28,22 @@ UVVM_LIB ?= $(HOME)/design/libs/uvvm_compiled/ghdl      # compiled libraries (*-
 # ---- Sim Config
 GENERICS ?=            # make sim only, e.g. GENERICS="-gGC_SPS=5 -gGC_CCPS=1"; sim-all ignores it
 
+# configurations sim-all runs per testbench: one word per run, generics separated by commas,
+# "default" = the testbench's own generic defaults; a testbench with no list runs once with its defaults
+CONFIGS_bpsk_tx_tb := default \
+	GC_SPS=8,GC_CCPS=2,GC_PHASE_WIDTH=8,GC_ADDR_WIDTH=4 \
+	GC_SPS=12,GC_CCPS=3 \
+	GC_SPS=16,GC_CCPS=7 \
+	GC_SPS=64,GC_CCPS=1,GC_SAMPLE_WIDTH=12,GC_ADDR_WIDTH=10 \
+	GC_SPS=128,GC_CCPS=1 \
+	GC_SPS=32,GC_CCPS=8,GC_PHASE_WIDTH=28
+
 # ---- Paths
 SIM_DIR   := sim
 BUILD_DIR := build
 NCO_DIR   := ip/rtl_nco
 SRC       := $(wildcard src/*.vhd) $(wildcard $(NCO_DIR)/src/*.vhd)
-TBS       := $(wildcard tb/*.vhd)
+TBS       := $(wildcard tb/*.vhd) $(wildcard $(NCO_DIR)/tb/*.vhd)
 
 TOP  := $(strip $(TOP))
 TB   := $(strip $(TB))
@@ -49,7 +59,7 @@ VIVADO_BATCH = cd $(BUILD_DIR) && $(VIVADO) -mode batch -nojournal -notrace
 help:
 	@echo "Simulation (GHDL, VHDL-2008)"
 	@echo "  make sim   [TB=$(TB)]         analyse, elaborate, run -> $(SIM_DIR)/<TB>.ghw"
-	@echo "  make sim-all                  run every tb/*_tb.vhd and print a pass/fail summary"
+	@echo "  make sim-all                  run every *_tb.vhd in each CONFIGS_<tb> configuration, print pass/fail"
 	@echo "  make wave  [TB=$(TB)]         open the .ghw in $(WAVEVIEWER)"
 	@echo "Vivado (part $(PART))"
 	@echo "  make synth [TOP=$(TOP)]       synthesis -> $(BUILD_DIR)/post_synth.dcp + reports"
@@ -96,20 +106,26 @@ sim:
 # UVVM stops with status 1 at its stop limit, but with a raised limit it only prints
 # "Simulation FAILED" from report_alert_counters(FINAL)
 TB_NAMES := $(basename $(notdir $(filter %_tb.vhd,$(TBS))))
+# every run as <testbench>:<config>
+SIM_RUNS := $(foreach tb,$(TB_NAMES),$(addprefix $(tb):,$(or $(CONFIGS_$(tb)),default)))
 
+# the full log is printed only for a failing run
 sim-all:
 	@[ -n "$(TB_NAMES)" ] || { echo "no testbenches in tb/"; exit 1; }
 	@failed=""; \
-	for tb in $(TB_NAMES); do \
-		echo "=== $$tb"; \
-		out=$$($(MAKE) --no-print-directory sim TB=$$tb GENERICS= 2>&1); status=$$?; \
-		echo "$$out"; \
-		if [ $$status -ne 0 ] || echo "$$out" | grep -qE '\((assertion|report) (error|failure)\)|Simulation FAILED'; then \
-			failed="$$failed $$tb"; \
+	for run in $(SIM_RUNS); do \
+		tb=$${run%%:*}; cfg=$${run#*:}; \
+		if [ "$$cfg" = default ]; then gen=""; else gen="-g$$(echo $$cfg | sed 's/,/ -g/g')"; fi; \
+		out=$$($(MAKE) --no-print-directory sim TB=$$tb GENERICS="$$gen" 2>&1); status=$$?; \
+		if [ $$status -ne 0 ] || ! echo "$$out" | grep -q 'Simulation SUCCESS' || \
+		   echo "$$out" | grep -qE '\((assertion|report) (error|failure)\)|Simulation FAILED'; then \
+			echo "$$out"; echo "FAIL  $$tb  $$cfg"; failed="$$failed $$run"; \
+		else \
+			echo "pass  $$tb  $$cfg"; \
 		fi; \
 	done; \
 	echo "==="; \
-	if [ -n "$$failed" ]; then echo "FAILED:$$failed"; exit 1; else echo "all testbenches passed: $(TB_NAMES)"; fi
+	if [ -n "$$failed" ]; then echo "FAILED:$$failed"; exit 1; else echo "all $(words $(SIM_RUNS)) runs passed"; fi
 
 wave:
 	$(WAVEVIEWER) $(SIM_DIR)/$(TB).ghw &
