@@ -12,21 +12,27 @@ use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
 entity bpsk_tx_tb is
     generic (
         GC_SAMPLE_WIDTH : positive := 8;
-        GC_SPS          : positive := 8;
-        GC_CCPS         : positive := 2;
-        GC_PHASE_WIDTH  : positive := 8;
-        GC_ADDR_WIDTH   : positive := 4
+        GC_SPS          : positive := 32;
+        GC_CCPS         : positive := 8;
+        GC_PHASE_WIDTH  : positive := 24;
+        GC_ADDR_WIDTH   : positive := 8
     );
 end entity bpsk_tx_tb;
 
 architecture bhv of bpsk_tx_tb is
     -- constants
-    constant C_TCLK       : time    := 10 ns;
-    constant C_TX_LATENCY : natural := 1; -- number of clock cycles from edge bit is accepted to valid output
+    constant C_TCLK : time := 10 ns;
+
+    constant C_NCO_LATENCY : natural := 2;                 -- clocks from NCO clk_en to its valid sine_data
+    constant C_TX_LATENCY  : natural := 1 + C_NCO_LATENCY; -- number of clock cycles from edge bit is accepted to valid output
+
+    -- computed in unsigned so any GC_PHASE_WIDTH works
+    constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
+        shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
+    constant C_STEP_SIZE : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
+    constant C_AMPLITUDE : integer                               := 2 ** (GC_SAMPLE_WIDTH - 1) - 1;
 
     constant C_SAMPLE_DEFAULT : signed(GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
-    constant C_SAMPLE_LOW     : signed(GC_SAMPLE_WIDTH - 1 downto 0) := (others => '1');
-    constant C_SAMPLE_HIGH    : signed(GC_SAMPLE_WIDTH - 1 downto 0) := to_signed(1, GC_SAMPLE_WIDTH);
 
     -- entity signals
     signal clk    : std_logic := '0';
@@ -44,23 +50,38 @@ architecture bhv of bpsk_tx_tb is
     shared variable sb   : bitvis_vip_scoreboard.int_sb_pkg.t_generic_sb; -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT;    -- watchdog
 
-    function f_expected(constant bit_value : std_logic) return integer is
+    -- reference model: expected output for an accumulator value
+    function f_expected_sine(constant phase : unsigned) return integer is
+        constant C_ADDRESS                      : natural := to_integer(phase(phase'high downto phase'high - GC_ADDR_WIDTH + 1));
+    begin
+        return integer(round(sin(MATH_2_PI * real(C_ADDRESS) / real(2 ** GC_ADDR_WIDTH)) * real(C_AMPLITUDE)));
+        -- alternatively: integer(round(sin(MATH_2_PI * real(GC_CCPS * sample_index) / real(GC_SPS))* real(C_AMPLITUDE)));
+    end function;
+
+    function f_expected(constant bit_value : std_logic; constant phase : unsigned) return integer is
     begin
         if bit_value = '1' then
-            return to_integer(C_SAMPLE_HIGH);
+            return f_expected_sine(phase);
         else
-            return to_integer(C_SAMPLE_LOW);
+            return -f_expected_sine(phase);
         end if;
     end function;
+
     procedure add_expected_bit (constant bit_value : std_logic) is
+        variable v_phase                               : unsigned(GC_PHASE_WIDTH - 1 downto 0) := (others => '0');
     begin
         for i in 0 to GC_SPS - 1 loop
-            sb.add_expected(f_expected(bit_value));
+            sb.add_expected(f_expected(bit_value, v_phase));
+            v_phase := v_phase + C_STEP_SIZE;
         end loop;
     end procedure;
 begin
+    assert C_STEP_NUM mod GC_SPS = 0
+        report "step size is not an integer: GC_CCPS * 2**GC_PHASE_WIDTH must be a multiple of GC_SPS"
+        severity failure;
+        
     clock_generator(clk, C_TCLK);
-    watchdog_timer(watchdog_ctrl, 50 us, FAILURE, "bpsk_tx simulation hung");
+    watchdog_timer(watchdog_ctrl, 500 us, FAILURE, "bpsk_tx simulation hung");
 
     i_dut : entity work.bpsk_tx
         generic map(
