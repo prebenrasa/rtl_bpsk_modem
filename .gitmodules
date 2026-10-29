@@ -1,0 +1,3 @@
+[submodule "ip/rtl_nco"]
+	path = ip/rtl_nco
+	url = https://github.com/prebenrasa/rtl_nco.git

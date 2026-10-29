@@ -1,0 +1,131 @@
+{
+    "version": "2.0.0",
+    "inputs": [
+        {
+            "id": "tb",
+            "type": "promptString",
+            "description": "Testbench entity",
+            "default": "top_tb"
+        },
+        {
+            "id": "top",
+            "type": "promptString",
+            "description": "Top-level entity for synthesis",
+            "default": "top"
+        }
+    ],
+    "tasks": [
+        {
+            "label": "GHDL: simulate",
+            "type": "shell",
+            "command": "make sim TB=${input:tb}",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": [
+                {
+                    "owner": "ghdl",
+                    "source": "ghdl",
+                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(?!@)\\s*(?:(error|warning):)?\\s*(.*)$",
+                        "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                    }
+                },
+                {
+                    "owner": "ghdl-run",
+                    "source": "ghdl sim",
+                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "severity": "info",
+                    "pattern": {
+                        "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) note\\):\\s*(.*)$",
+                        "file": 1, "line": 2, "column": 3, "code": 4, "message": 5
+                    }
+                },
+                {
+                    "owner": "ghdl-run",
+                    "source": "ghdl sim",
+                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "severity": "warning",
+                    "pattern": {
+                        "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) warning\\):\\s*(.*)$",
+                        "file": 1, "line": 2, "column": 3, "code": 4, "message": 5
+                    }
+                },
+                {
+                    "owner": "ghdl-run",
+                    "source": "ghdl sim",
+                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) (?:error|failure)\\):\\s*(.*)$",
+                        "file": 1, "line": 2, "column": 3, "code": 4, "message": 5
+                    }
+                }
+            ]
+        },
+        {
+            "label": "GHDL: simulate all testbenches",
+            "type": "shell",
+            "command": "make sim-all",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "GHDL: open waveform (GTKWave)",
+            "type": "shell",
+            "command": "make wave TB=${input:tb}",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado: synthesis",
+            "type": "shell",
+            "command": "make synth TOP=${input:top}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado: implementation",
+            "type": "shell",
+            "command": "make impl",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado: synthesis + implementation",
+            "type": "shell",
+            "command": "make synth impl TOP=${input:top}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado: bitstream (optional)",
+            "type": "shell",
+            "command": "make bit",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado GUI: RTL schematic",
+            "type": "shell",
+            "command": "make rtl TOP=${input:top}",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado GUI: open synthesised design",
+            "type": "shell",
+            "command": "make open-synth",
+            "problemMatcher": []
+        },
+        {
+            "label": "Vivado GUI: open implemented design",
+            "type": "shell",
+            "command": "make open-impl",
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "make clean",
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,9 @@
+sim/
+build/
+.Xil/
+clockInfo.txt
+*.jou
+*.log
+*.str
+*.ghw
+*.cf

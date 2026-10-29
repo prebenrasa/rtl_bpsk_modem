@@ -1,0 +1,17 @@
+{
+    "files.associations": {
+        "*.xdc": "tcl",
+        "*.rpt": "log"
+    },
+    "files.exclude": {
+        "**/.Xil": true
+    },
+    "search.exclude": {
+        "sim/**": true,
+        "build/**": true
+    },
+    "[vhdl]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+    }
+}
