@@ -37,6 +37,7 @@ CONFIGS_bpsk_tx_tb := default \
 	GC_SPS=64,GC_CCPS=1,GC_SAMPLE_WIDTH=12,GC_ADDR_WIDTH=10 \
 	GC_SPS=128,GC_CCPS=1 \
 	GC_SPS=32,GC_CCPS=8,GC_PHASE_WIDTH=28
+CONFIGS_bpsk_rx_tb := $(CONFIGS_bpsk_tx_tb) # rx runs the tx configurations
 
 # ---- Paths
 SIM_DIR   := sim
