@@ -16,7 +16,8 @@ entity bpsk_rx_tb is
         GC_SPS          : positive := 32;
         GC_CCPS         : positive := 8;
         GC_PHASE_WIDTH  : positive := 24;
-        GC_ADDR_WIDTH   : positive := 8
+        GC_ADDR_WIDTH   : positive := 8;
+        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2 
     );
 end entity bpsk_rx_tb;
 
@@ -38,7 +39,7 @@ architecture bhv of bpsk_rx_tb is
     signal clk_en : std_logic := '0';
     signal reset  : std_logic := '1';
 
-    signal bit_data, bit_valid, sample_valid : std_logic := '0';
+    signal bit_data, bit_valid,bit_trust, sample_valid : std_logic := '0';
     signal sample_data                       : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- tb helpers
@@ -87,7 +88,8 @@ begin
             GC_SPS          => GC_SPS,
             GC_CCPS         => GC_CCPS,
             GC_PHASE_WIDTH  => GC_PHASE_WIDTH,
-            GC_ADDR_WIDTH   => GC_ADDR_WIDTH
+            GC_ADDR_WIDTH   => GC_ADDR_WIDTH,
+            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
         )
         port map(
             clk          => clk,
@@ -96,7 +98,8 @@ begin
             sample_data  => sample_data,
             sample_valid => sample_valid,
             bit_data     => bit_data,
-            bit_valid    => bit_valid
+            bit_valid    => bit_valid,
+            bit_trust    => bit_trust
         );
 
     p_clk_en : process
@@ -201,6 +204,7 @@ begin
         -- check symbol decoding
         if bit_valid = '1' then
             sb.check_received(bit_data);
+            check_value(bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
         end if;
 
     end process;

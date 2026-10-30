@@ -14,6 +14,9 @@
 --   GC_PHASE_WIDTH   : NCO phase accumulator width N. Sets frequency resolution.
 --   GC_ADDR_WIDTH    : sine LUT address width M (2**M entries), taken from the
 --                     top M bits of the phase. Must be <= GC_PHASE_WIDTH.
+--   GC_CORR_THRESHOLD: trust threshold for a decision. bit_trust = '1' when
+--                     |correlation| >= GC_CORR_THRESHOLD, where correlation is
+--                     the sum of sample * carrier over one symbol.
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
@@ -29,6 +32,7 @@
 --
 -- Output
 --   bit valid is a one clk pulse. bit_data holds its value until the next output. 
+--   bit_trust is updated with bit_data: '1' when |correlation| >= GC_CORR_THRESHOLD.
 --   
 --
 -- Timing (clk_en = '1' every clock)
@@ -50,7 +54,8 @@ entity bpsk_rx is
         GC_SPS          : positive := 32;         -- Samples per Symbol (SPS) 
         GC_CCPS         : positive := (GC_SPS/4); -- Carrier Cycles per Symbol (CCPS) 
         GC_PHASE_WIDTH  : positive := 24;         -- N accumulator width
-        GC_ADDR_WIDTH   : positive := 10          -- M LUT address = top M bits of the phase
+        GC_ADDR_WIDTH   : positive := 10;          -- M LUT address = top M bits of the phase
+        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2 -- threshold for classifying decision as trustworthy
     );
     port (
         clk          : in std_logic;
@@ -59,7 +64,8 @@ entity bpsk_rx is
         sample_data  : in signed(GC_SAMPLE_WIDTH - 1 downto 0);
         sample_valid : in std_logic;
         bit_data     : out std_logic;
-        bit_valid    : out std_logic
+        bit_valid    : out std_logic;
+        bit_trust    : out std_logic
     );
 begin
     assert 2 * GC_CCPS < GC_SPS
@@ -93,6 +99,7 @@ architecture rtl of bpsk_rx is
     signal s_decision_accumulator : signed(2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS)))) - 1 downto 0) := (others => '0');
     signal s_bit_data             : std_logic;
     signal s_bit_valid            : std_logic;
+    signal s_bit_trust            : std_logic;
 begin
     assert C_STEP_NUM mod GC_SPS = 0
         report "NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS is not an integer: carrier phase drifts" severity failure;
@@ -149,13 +156,14 @@ begin
     end process;
 
     -- output: use correlator to decide bit value --> sum of sample × local carrier over one symbol
-    -- decision rule: corr ? 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
+    -- decision rule: corr > 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
     p_output : process (clk, reset)
         variable v_sum : signed(s_decision_accumulator'range); -- combinational: acc + this cycle's product
     begin
         if reset = '1' then
             s_bit_data             <= '0';
             s_bit_valid            <= '0';
+            s_bit_trust            <= '0';
             s_decision_accumulator <= (others => '0');
         elsif rising_edge(clk) then
             s_bit_valid <= '0';
@@ -165,6 +173,11 @@ begin
                     s_bit_data             <= not v_sum(v_sum'high);
                     s_bit_valid            <= '1';
                     s_decision_accumulator <= (others => '0');
+                    if abs(v_sum) < GC_CORR_THRESHOLD then
+                        s_bit_trust <= '0';
+                    else 
+                        s_bit_trust <= '1';
+                    end if;
                 else
                     s_decision_accumulator <= v_sum;
                 end if;
@@ -172,6 +185,7 @@ begin
         end if;
     end process;
 
+    bit_trust <= s_bit_trust;
     bit_data  <= s_bit_data;
     bit_valid <= s_bit_valid;
 
