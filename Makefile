@@ -5,7 +5,7 @@
 # =============================================================================
 
 # ---- Design selection (override on the command line, e.g. make sim TB=counter_tb)
-TOP   ?= bpsk_tx                # top-level entity for synthesis / implementation
+TOP   ?= bpsk_modem                # top-level entity for synthesis / implementation
 TB    ?= bpsk_tx_tb             # testbench entity for simulation
 STOP  ?= 1ms               # safety stop time for simulation
 
@@ -38,6 +38,7 @@ CONFIGS_bpsk_tx_tb := default \
 	GC_SPS=128,GC_CCPS=1 \
 	GC_SPS=32,GC_CCPS=8,GC_PHASE_WIDTH=28
 CONFIGS_bpsk_rx_tb := $(CONFIGS_bpsk_tx_tb) # rx runs the tx configurations
+CONFIGS_bpsk_modem_tb := $(CONFIGS_bpsk_tx_tb) # modem loopback runs the tx configurations
 
 # ---- Paths
 SIM_DIR   := sim
