@@ -36,7 +36,7 @@
 --   
 --
 -- Timing (valid every clock)
---   Latency : 2 clocks from the edge that takes the last sample of a symbol
+--   Latency : 4 clocks from the edge that takes the last sample of a symbol
 --   Rate    : one bit per GC_SPS accepted samples
 --
 -- Notes
@@ -51,11 +51,11 @@ use ieee.math_real.all;
 
 entity bpsk_rx is
     generic (
-        GC_SAMPLE_WIDTH : positive := 8;          -- Bit width of received samples and NCO L output amplitude width
-        GC_SPS          : positive := 32;         -- Samples per Symbol (SPS) 
-        GC_CCPS         : positive := (GC_SPS/4); -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH  : positive := 24;         -- N accumulator width
-        GC_ADDR_WIDTH   : positive := 10;          -- M LUT address = top M bits of the phase
+        GC_SAMPLE_WIDTH   : positive := 8;                                 -- Bit width of received samples and NCO L output amplitude width
+        GC_SPS            : positive := 32;                                -- Samples per Symbol (SPS) 
+        GC_CCPS           : positive := (GC_SPS/4);                        -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH    : positive := 24;                                -- N accumulator width
+        GC_ADDR_WIDTH     : positive := 10;                                -- M LUT address = top M bits of the phase
         GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2 -- threshold for classifying decision as trustworthy
     );
     port (
@@ -76,35 +76,47 @@ architecture rtl of bpsk_rx is
     -- carrier, computed in unsigned so any GC_PHASE_WIDTH works
     constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
     shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
-        constant C_STEP_SIZE   : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
+    constant C_STEP_SIZE   : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
     constant C_NCO_LATENCY : natural                               := 2; -- clocks from NCO clk_en to its valid sine_data. Must match NCO
+    constant C_ACC_WIDTH   : natural                               := 2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS))));
 
     -- control (reset) signals
     signal s_count : integer range 0 to GC_SPS - 1 := 0; -- sample index within current symbol
 
     -- decoded control (combinational)
-    signal s_last      : std_logic; -- this sample tick is the last of the current symbol
+    signal s_last  : std_logic; -- this sample tick is the last of the current symbol
+    signal s_first : std_logic; -- this sample tick is the first of the current symbol
 
     -- datapath and delay alignment with NCO
     type signed_array_t is array (C_NCO_LATENCY - 1 downto 0) of signed(GC_SAMPLE_WIDTH - 1 downto 0);
     signal s_sample_data_dly : signed_array_t                               := (others => (others => '0'));
     signal s_last_dly        : std_logic_vector(C_NCO_LATENCY - 1 downto 0) := (others => '0');
+    signal s_first_dly       : std_logic_vector(C_NCO_LATENCY - 1 downto 0) := (others => '0');
 
     -- NCO
     signal s_sine_valid : std_logic;
     signal s_sine_data  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
+    -- bit decision
+    signal s_decision_product     : signed(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
+    signal s_decision_accumulator : signed(C_ACC_WIDTH - 1 downto 0)         := (others => '0');
+    signal s_decision_done        : std_logic                                := '0'; -- high when s_decision_accumulator holds new symbol
+    signal s_sine_valid_m         : std_logic                                := '0'; -- registers sine_valid value during multiply stage
+    signal s_last_m               : std_logic                                := '0'; -- registers last value during multiply stage
+    signal s_first_m               : std_logic                                := '0'; -- registers first value during multiply stage
+
     -- output 
-    signal s_decision_accumulator : signed(2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS)))) - 1 downto 0) := (others => '0');
-    signal s_bit_data             : std_logic;
-    signal s_bit_valid            : std_logic;
-    signal s_bit_trust            : std_logic;
+    signal s_bit_data  : std_logic;
+    signal s_bit_valid : std_logic;
+    signal s_bit_trust : std_logic;
 begin
     assert C_STEP_NUM mod GC_SPS = 0
-        report "NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS is not an integer: carrier phase drifts" severity failure;
+    report "NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS is not an integer: carrier phase drifts" severity failure;
 
-    s_last      <= '1' when (s_count = GC_SPS - 1) else
-    '0';
+    s_last <= '1' when (s_count = GC_SPS - 1) else
+        '0';
+    s_first <= '1' when (s_count = 0) else
+        '0';
 
     -- control: sample counter.
     p_ctrl : process (clk, reset)
@@ -149,35 +161,55 @@ begin
     p_align_ctrl : process (clk)
     begin
         if rising_edge(clk) then
-            s_last_dly <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
+            s_last_dly  <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
+            s_first_dly <= s_first_dly(s_first_dly'high - 1 downto 0) & (s_first and sample_valid);
+        end if;
+    end process;
+
+    -- stage 2: accumulate
+    p_decision_data : process (clk)
+    begin
+        if rising_edge(clk) then
+            s_decision_product <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
+
+            if s_sine_valid_m then
+                if s_first_m then
+                    s_decision_accumulator <= resize(s_decision_product, s_decision_accumulator'length);
+                else 
+                    s_decision_accumulator <= s_decision_accumulator + s_decision_product;
+                end if;
+            end if;
         end if;
     end process;
 
     -- output: use correlator to decide bit value --> sum of sample x local carrier over one symbol
     -- decision rule: corr > 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
     p_output : process (clk, reset)
-        variable v_sum : signed(s_decision_accumulator'range); -- combinational: acc + this cycle's product
     begin
         if reset = '1' then
             s_bit_data             <= '0';
             s_bit_valid            <= '0';
             s_bit_trust            <= '0';
-            s_decision_accumulator <= (others => '0');
+            s_decision_done        <= '0';
+            s_sine_valid_m         <= '0';
+            s_last_m               <= '0';
+            s_first_m               <= '0';
         elsif rising_edge(clk) then
-            s_bit_valid <= '0';
-            if s_sine_valid = '1' then
-                v_sum := s_decision_accumulator + s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
-                if s_last_dly(s_last_dly'high) then
-                    s_bit_data             <= not v_sum(v_sum'high);
-                    s_bit_valid            <= '1';
-                    s_decision_accumulator <= (others => '0');
-                    if abs(v_sum) < GC_CORR_THRESHOLD then
-                        s_bit_trust <= '0';
-                    else 
-                        s_bit_trust <= '1';
-                    end if;
+            -- stage 1: multiply and register ctrl and data signals in the current cycle
+            s_sine_valid_m <= s_sine_valid;
+            s_last_m       <= s_sine_valid and s_last_dly(s_last_dly'high);
+            s_first_m       <= s_sine_valid and s_first_dly(s_first_dly'high);
+
+            s_decision_done <= s_sine_valid_m and s_last_m;
+
+            -- stage 3: decision
+            s_bit_valid <= s_decision_done;
+            if s_decision_done = '1' then
+                s_bit_data <= not s_decision_accumulator(s_decision_accumulator'high);
+                if s_decision_accumulator < GC_CORR_THRESHOLD and s_decision_accumulator > (-GC_CORR_THRESHOLD) then
+                    s_bit_trust <= '0';
                 else
-                    s_decision_accumulator <= v_sum;
+                    s_bit_trust <= '1';
                 end if;
             end if;
         end if;

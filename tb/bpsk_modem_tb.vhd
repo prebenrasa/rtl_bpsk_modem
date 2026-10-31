@@ -26,7 +26,7 @@ architecture bhv of bpsk_modem_tb is
     constant C_TCLK : time := 10 ns;
 
     constant C_NCO_LATENCY   : natural := 2;                                    -- clocks from NCO clk_en to its valid sine_data
-    constant C_RX_LATENCY    : natural := C_NCO_LATENCY;                        -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
+    constant C_RX_LATENCY    : natural := C_NCO_LATENCY + 2;                    -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
     constant C_TX_LATENCY    : natural := 1 + C_NCO_LATENCY;                    -- tx: clocks from the edge that accepts a bit to its first valid sample
     constant C_MODEM_LATENCY : natural := C_RX_LATENCY + C_TX_LATENCY + GC_SPS; -- clocks from the edge that accepts a bit to rx_bit_valid
 
@@ -51,7 +51,7 @@ architecture bhv of bpsk_modem_tb is
 
 begin
     clock_generator(clk, C_TCLK);
-    watchdog_timer(watchdog_ctrl, GC_SPS**2 * 100 * C_TCLK, FAILURE, "bpsk_modem simulation hung");
+    watchdog_timer(watchdog_ctrl, GC_SPS ** 2 * 100 * C_TCLK, FAILURE, "bpsk_modem simulation hung");
 
     i_dut : entity work.bpsk_modem
         generic map(
@@ -63,9 +63,9 @@ begin
             GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
         )
         port map(
-            clk         => clk,
-            clk_en      => clk_en,
-            reset       => reset,
+            clk          => clk,
+            clk_en       => clk_en,
+            reset        => reset,
             tx_bit_data  => tx_bit_data,
             tx_bit_valid => tx_bit_valid,
             tx_bit_ready => tx_bit_ready,
@@ -256,7 +256,7 @@ begin
             drain;
         end loop;
         s_en_pattern <= "1111";
-        
+
         sb.report_counters(VOID);
         report_alert_counters(FINAL); -- prints "Simulation SUCCESS" or "Simulation FAILED"
         std.env.stop;

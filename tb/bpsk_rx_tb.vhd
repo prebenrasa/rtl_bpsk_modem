@@ -12,12 +12,12 @@ use work.bpsk_rx_sb_support_pkg.all;
 
 entity bpsk_rx_tb is
     generic (
-        GC_SAMPLE_WIDTH : positive := 8;
-        GC_SPS          : positive := 32;
-        GC_CCPS         : positive := 8;
-        GC_PHASE_WIDTH  : positive := 24;
-        GC_ADDR_WIDTH   : positive := 8;
-        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2 
+        GC_SAMPLE_WIDTH   : positive := 8;
+        GC_SPS            : positive := 32;
+        GC_CCPS           : positive := 8;
+        GC_PHASE_WIDTH    : positive := 24;
+        GC_ADDR_WIDTH     : positive := 8;
+        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2
     );
 end entity bpsk_rx_tb;
 
@@ -25,8 +25,8 @@ architecture bhv of bpsk_rx_tb is
     -- constants
     constant C_TCLK : time := 10 ns;
 
-    constant C_NCO_LATENCY : natural := 2;             -- clocks from NCO clk_en to its valid sine_data
-    constant C_RX_LATENCY  : natural := C_NCO_LATENCY; -- clocks from the edge that takes the last sample of a symbol to bit_valid
+    constant C_NCO_LATENCY : natural := 2;                 -- clocks from NCO clk_en to its valid sine_data
+    constant C_RX_LATENCY  : natural := C_NCO_LATENCY + 2; -- clocks from the edge that takes the last sample of a symbol to bit_valid
 
     -- computed in unsigned so any GC_PHASE_WIDTH works
     constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
@@ -35,11 +35,11 @@ architecture bhv of bpsk_rx_tb is
     constant C_AMPLITUDE : integer                               := 2 ** (GC_SAMPLE_WIDTH - 1) - 1;
 
     -- entity signals
-    signal clk    : std_logic := '0';
-    signal reset  : std_logic := '1';
+    signal clk   : std_logic := '0';
+    signal reset : std_logic := '1';
 
-    signal bit_data, bit_valid,bit_trust, sample_valid : std_logic := '0';
-    signal sample_data                       : signed(GC_SAMPLE_WIDTH - 1 downto 0);
+    signal bit_data, bit_valid, bit_trust, sample_valid : std_logic := '0';
+    signal sample_data                                  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- tb helpers
     shared variable sb   : work.bpsk_rx_sb_pkg.t_generic_sb;           -- scoreboard
@@ -70,7 +70,7 @@ architecture bhv of bpsk_rx_tb is
 
         if bit_value = '1' then
             return v_sine;
-            else
+        else
             return -v_sine;
         end if;
     end function;
@@ -81,11 +81,11 @@ begin
 
     i_dut : entity work.bpsk_rx
         generic map(
-            GC_SAMPLE_WIDTH => GC_SAMPLE_WIDTH,
-            GC_SPS          => GC_SPS,
-            GC_CCPS         => GC_CCPS,
-            GC_PHASE_WIDTH  => GC_PHASE_WIDTH,
-            GC_ADDR_WIDTH   => GC_ADDR_WIDTH,
+            GC_SAMPLE_WIDTH   => GC_SAMPLE_WIDTH,
+            GC_SPS            => GC_SPS,
+            GC_CCPS           => GC_CCPS,
+            GC_PHASE_WIDTH    => GC_PHASE_WIDTH,
+            GC_ADDR_WIDTH     => GC_ADDR_WIDTH,
             GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
         )
         port map(
@@ -136,9 +136,9 @@ begin
         begin
             if abs(sym.corr) <= sym.abs_sum * C_EPS_MAX then
                 return C_BIT_DONT_CARE;
-                elsif sym.corr > 0.0 then
+            elsif sym.corr > 0.0 then
                 return '1';
-                else
+            else
                 return '0';
             end if;
         end function;
@@ -154,7 +154,7 @@ begin
             if not sb.is_empty(VOID) then
                 sb.flush("bits in flight are discarded by reset");
             end if;
-            else
+        else
             -- protocol check: check that input is not 'U'/'X''
             check_value(not is_x(sample_valid), ERROR, "sample_valid unknown");
 
@@ -183,7 +183,7 @@ begin
             wait for C_TCLK/4; -- avoids immediate failure at start of simulation
             check_value(bit_data, '0', "bit_data not low after reset");
             check_value(bit_valid, '0', "bit_valid not low after reset");
-            else
+        else
             check_value(not is_x(bit_data), ERROR, "bit_data unknown");
             check_value(not is_x(bit_valid), ERROR, "bit_valid unknown");
         end if;
@@ -200,7 +200,7 @@ begin
         begin
             wait_num_rising_edge_plus_margin(clk, n, C_TCLK/4);
         end procedure;
-        
+
         procedure apply_reset is
         begin
             reset <= '1';
@@ -249,7 +249,7 @@ begin
             end loop;
         end procedure;
 
-        procedure drain is    -- wait for every expected bit, but at most C_DRAIN_LIMIT edges
+        procedure drain is                                     -- wait for every expected bit, but at most C_DRAIN_LIMIT edges
             constant C_DRAIN_LIMIT : positive := C_RX_LATENCY + 2; -- latency + margin
             variable v_edges       : natural  := 0;
         begin

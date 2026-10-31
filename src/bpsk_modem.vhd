@@ -40,8 +40,8 @@
 --   until the next output.
 --
 -- Timing (clk_en = '1' every clock)
---   Latency : GC_SPS + 5 clocks from the edge that accepts a bit to rx_bit_valid
---             (tx latency 3 + GC_SPS samples + rx latency 2).
+--   Latency : GC_SPS + 7 clocks from the edge that accepts a bit to rx_bit_valid
+--             (tx latency 3 + GC_SPS samples + rx latency 4).
 --   Rate    : one bit per GC_SPS clk_en pulses. Back-to-back bits have no gap.
 --
 -- Notes
