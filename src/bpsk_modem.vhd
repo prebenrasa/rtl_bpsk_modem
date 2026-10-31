@@ -1,3 +1,53 @@
+--------------------------------------------------------------------------------
+-- Entity  : bpsk_modem
+-- Purpose : Loopback of bpsk_tx into bpsk_rx: modulates an input bit stream onto a
+--           sine carrier and demodulates it back to bits. No channel in between.
+--
+-- Generics
+--   GC_SAMPLE_WIDTH : width of sample_data in bits (two's complement), and the
+--                     NCO amplitude width L. Range >= 2.
+--   GC_SPS          : samples per symbol: one bit lasts GC_SPS valid samples.
+--                     Must satisfy 2*GC_CCPS < GC_SPS (Nyquist, asserted).
+--   GC_CCPS         : carrier cycles per symbol. Carrier frequency =
+--                     GC_CCPS / GC_SPS cycles per sample. Range >= 1.
+--                     The NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS must be
+--                     an integer to ensure no phase drift.
+--   GC_PHASE_WIDTH   : NCO phase accumulator width N. Sets frequency resolution.
+--   GC_ADDR_WIDTH    : sine LUT address width M (2**M entries), taken from the
+--                     top M bits of the phase. Must be <= GC_PHASE_WIDTH.
+--   GC_CORR_THRESHOLD: trust threshold for a decision. bit_trust = '1' when
+--                     |correlation| >= GC_CORR_THRESHOLD, where correlation is
+--                     the sum of sample * carrier over one symbol.
+--
+-- Clock and enable
+--   clk    : single clock domain. rising edge.
+--   clk_en : paces bpsk_tx, one sample per clk_en = '1'. bpsk_rx has no clock
+--            enable: it takes every sample qualified by the tx sample_valid.
+--
+-- Reset
+--   async. active high. Shared by tx and rx.
+--   state after reset: tx idle and waiting for bit input, rx waiting for samples.
+--                      Symbols in flight are abandoned.
+--   tx and rx must be reset together: rx symbol alignment and carrier phase
+--   follow from both sample counters and NCOs starting at 0.
+--
+-- Input handshake
+--   A bit is accepted at a rising edge where tx_bit_valid = '1' and tx_bit_ready = '1'
+--   (bpsk_tx handshake). Sender: hold tx_bit_valid and tx_bit_data until accepted.
+--
+-- Output
+--   rx_bit_valid is a one clk pulse. rx_bit_data and rx_bit_trust hold their value
+--   until the next output.
+--
+-- Timing (clk_en = '1' every clock)
+--   Latency : GC_SPS + 5 clocks from the edge that accepts a bit to rx_bit_valid
+--             (tx latency 3 + GC_SPS samples + rx latency 2).
+--   Rate    : one bit per GC_SPS clk_en pulses. Back-to-back bits have no gap.
+--
+-- Notes
+--   - Ideal channel: tx and rx share clock, carrier phase and symbol timing, so
+--     no carrier or symbol synchronisation is needed.
+--------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -16,12 +66,12 @@ entity bpsk_modem is
         clk         : in std_logic;  -- system clock
         clk_en      : in std_logic;  -- one sample per clk_en = '1'
         reset       : in std_logic;  -- async, active high
-        tx_bit_data  : in std_logic;  -- bit to send, held while bit_valid = '1'
-        tx_bit_valid : in std_logic;  -- bit_data holds a bit to send
-        tx_bit_ready  : out std_logic; -- modulated sample, zero when not valid
-        rx_bit_data  : out std_logic; -- modulated sample, zero when not valid
-        rx_bit_valid : out std_logic;  -- sample_data holds a valid sample
-        rx_bit_trust : out std_logic  -- sample_data holds a valid sample
+        tx_bit_data  : in std_logic;  -- bit to send, held until accepted
+        tx_bit_valid : in std_logic;  -- tx_bit_data holds a bit to send
+        tx_bit_ready  : out std_logic; -- a bit is accepted at the next edge if tx_bit_valid = '1'
+        rx_bit_data  : out std_logic; -- decoded bit, qualified by rx_bit_valid
+        rx_bit_valid : out std_logic;  -- one clk pulse per decoded bit
+        rx_bit_trust : out std_logic  -- '1' when |correlation| >= GC_CORR_THRESHOLD
     );
 end entity bpsk_modem;
 

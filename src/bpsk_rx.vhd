@@ -20,22 +20,23 @@
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
+--   No clock enable: the input is paced by sample_valid.
 --
 -- Reset
 --   async. active high.
---   state after reset: bpsk_rx is idle and waiting for bit input . 
+--   state after reset: bpsk_rx is idle and waiting for samples. 
 --                      A symbol being received is abandoned.
 --
 -- Input handshake 
 --   one sample per sample_valid. no backpressure.
 --
 -- Output
---   bit valid is a one clk pulse. bit_data holds its value until the next output. 
+--   bit_valid is a one clk pulse. bit_data holds its value until the next output. 
 --   bit_trust is updated with bit_data: '1' when |correlation| >= GC_CORR_THRESHOLD.
 --   
 --
 -- Timing (valid every clock)
---   Latency : 2 clocks from the edge that takes the last symbol
+--   Latency : 2 clocks from the edge that takes the last sample of a symbol
 --   Rate    : one bit per GC_SPS accepted samples
 --
 -- Notes
@@ -50,7 +51,7 @@ use ieee.math_real.all;
 
 entity bpsk_rx is
     generic (
-        GC_SAMPLE_WIDTH : positive := 8;          -- Bit width of tx output samples and NCO L output amplitude width
+        GC_SAMPLE_WIDTH : positive := 8;          -- Bit width of received samples and NCO L output amplitude width
         GC_SPS          : positive := 32;         -- Samples per Symbol (SPS) 
         GC_CCPS         : positive := (GC_SPS/4); -- Carrier Cycles per Symbol (CCPS) 
         GC_PHASE_WIDTH  : positive := 24;         -- N accumulator width
@@ -83,7 +84,6 @@ architecture rtl of bpsk_rx is
 
     -- decoded control (combinational)
     signal s_last      : std_logic; -- this sample tick is the last of the current symbol
-    signal s_sample_en : std_logic; -- a sample is taken at the next rising edge
 
     -- datapath and delay alignment with NCO
     type signed_array_t is array (C_NCO_LATENCY - 1 downto 0) of signed(GC_SAMPLE_WIDTH - 1 downto 0);
@@ -106,7 +106,7 @@ begin
     s_last      <= '1' when (s_count = GC_SPS - 1) else
     '0';
 
-    -- control: sample state and sample counter.
+    -- control: sample counter.
     p_ctrl : process (clk, reset)
     begin
         if reset = '1' then

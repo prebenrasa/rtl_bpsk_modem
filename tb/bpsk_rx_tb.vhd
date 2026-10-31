@@ -26,7 +26,7 @@ architecture bhv of bpsk_rx_tb is
     constant C_TCLK : time := 10 ns;
 
     constant C_NCO_LATENCY : natural := 2;             -- clocks from NCO clk_en to its valid sine_data
-    constant C_RX_LATENCY  : natural := C_NCO_LATENCY; -- number of clock cycles from edge bit is accepted to valid output
+    constant C_RX_LATENCY  : natural := C_NCO_LATENCY; -- clocks from the edge that takes the last sample of a symbol to bit_valid
 
     -- computed in unsigned so any GC_PHASE_WIDTH works
     constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
@@ -42,8 +42,6 @@ architecture bhv of bpsk_rx_tb is
     signal sample_data                       : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- tb helpers
-    signal s_en_pattern : std_logic_vector(0 to 3) := "1111"; -- cycled one bit per clock
-
     shared variable sb   : work.bpsk_rx_sb_pkg.t_generic_sb;           -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT; -- watchdog
 
@@ -251,7 +249,7 @@ begin
             end loop;
         end procedure;
 
-        procedure drain is    -- wait for every expected bit, but at most C_DRAIN_LIMIT enabled edges
+        procedure drain is    -- wait for every expected bit, but at most C_DRAIN_LIMIT edges
             constant C_DRAIN_LIMIT : positive := C_RX_LATENCY + 2; -- latency + margin
             variable v_edges       : natural  := 0;
         begin
@@ -261,7 +259,7 @@ begin
             end loop;
             check_value(sb.is_empty(VOID), ERROR,
             "drain timeout: " & to_string(sb.get_pending_count(VOID)) &
-            " expected bit(s) not received within " & to_string(C_DRAIN_LIMIT) & " enabled edges");
+            " expected bit(s) not received within " & to_string(C_DRAIN_LIMIT) & " edges");
             step(C_RX_LATENCY + 1); -- room for a stray extra bit
             check_value(bit_valid, '0', ERROR, "bit_valid high when no bit is expected");
         end procedure;
@@ -278,8 +276,6 @@ begin
         sb.disable_log_msg(ID_DATA); -- don't log every add/check
 
         log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS)); -- log config
-
-        s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "Reset, then recover");
         apply_reset;

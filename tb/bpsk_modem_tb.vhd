@@ -26,9 +26,9 @@ architecture bhv of bpsk_modem_tb is
     constant C_TCLK : time := 10 ns;
 
     constant C_NCO_LATENCY   : natural := 2;                                    -- clocks from NCO clk_en to its valid sine_data
-    constant C_RX_LATENCY    : natural := C_NCO_LATENCY;                        -- number of clock cycles from edge bit is accepted to valid output
-    constant C_TX_LATENCY    : natural := 1 + C_NCO_LATENCY;                    -- number of clock cycles from edge bit is accepted to valid output
-    constant C_MODEM_LATENCY : natural := C_RX_LATENCY + C_TX_LATENCY + GC_SPS; -- number of clock cycles from edge bit is accepted to valid output
+    constant C_RX_LATENCY    : natural := C_NCO_LATENCY;                        -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
+    constant C_TX_LATENCY    : natural := 1 + C_NCO_LATENCY;                    -- tx: clocks from the edge that accepts a bit to its first valid sample
+    constant C_MODEM_LATENCY : natural := C_RX_LATENCY + C_TX_LATENCY + GC_SPS; -- clocks from the edge that accepts a bit to rx_bit_valid
 
     -- computed in unsigned so any GC_PHASE_WIDTH works
     constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
@@ -88,11 +88,11 @@ begin
         variable v_pending_bit : std_logic;
     begin
         wait until rising_edge(clk);
-        -- discard waiting samples in scoreboard
+        -- discard waiting bits in scoreboard
         if reset = '1' then
             v_pending := false;
             if not sb.is_empty(VOID) then
-                sb.flush("samples in flight are discarded by reset");
+                sb.flush("bits in flight are discarded by reset");
             end if;
         else
             -- once valid, hold valid and data until accepted

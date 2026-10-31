@@ -77,7 +77,7 @@ entity bpsk_tx is
         clk          : in std_logic;                             -- system clock
         clk_en       : in std_logic;                             -- one sample per clk_en = '1'
         reset        : in std_logic;                             -- async, active high
-        bit_data     : in std_logic;                             -- bit to send, held while bit_valid = '1'
+        bit_data     : in std_logic;                             -- bit to send, held until accepted
         bit_valid    : in std_logic;                             -- bit_data holds a bit to send
         bit_ready    : out std_logic;                            -- a bit is accepted at the next edge if bit_valid = '1'
         sample_data  : out signed(GC_SAMPLE_WIDTH - 1 downto 0); -- modulated sample, zero when not valid
