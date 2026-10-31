@@ -36,7 +36,6 @@ architecture bhv of bpsk_rx_tb is
 
     -- entity signals
     signal clk    : std_logic := '0';
-    signal clk_en : std_logic := '0';
     signal reset  : std_logic := '1';
 
     signal bit_data, bit_valid,bit_trust, sample_valid : std_logic := '0';
@@ -93,7 +92,6 @@ begin
         )
         port map(
             clk          => clk,
-            clk_en       => clk_en,
             reset        => reset,
             sample_data  => sample_data,
             sample_valid => sample_valid,
@@ -101,14 +99,6 @@ begin
             bit_valid    => bit_valid,
             bit_trust    => bit_trust
         );
-
-    p_clk_en : process
-        variable v_i : natural := 0;
-    begin
-        wait until rising_edge(clk);
-        clk_en <= s_en_pattern(v_i);
-        v_i := (v_i + 1) mod s_en_pattern'length;
-    end process;
 
     p_in_monitor : process
         -- reference model --------------------------------------------------------
@@ -168,11 +158,10 @@ begin
             end if;
             else
             -- protocol check: check that input is not 'U'/'X''
-            check_value(not is_x(clk_en), ERROR, "clk_en unknown");
             check_value(not is_x(sample_valid), ERROR, "sample_valid unknown");
 
             -- assemble the symbol using the reference carrier
-            if clk_en = '1' and sample_valid = '1' then
+            if sample_valid = '1' then
                 check_value(not is_x(sample_data), ERROR, "sample_data unknown at transfer");
                 v_symbol := f_add_sample(v_symbol, sample_data);
 
@@ -206,7 +195,6 @@ begin
             sb.check_received(bit_data);
             check_value(bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
         end if;
-
     end process;
 
     p_stimulus : process
@@ -214,18 +202,7 @@ begin
         begin
             wait_num_rising_edge_plus_margin(clk, n, C_TCLK/4);
         end procedure;
-        procedure wait_enabled_edges(constant n : positive) is
-            variable v_count                        : natural := 0;
-            variable v_enabled                      : std_logic;
-        begin
-            while v_count < n loop
-                v_enabled := clk_en; -- value the next edge will sample
-                step(1);
-                if v_enabled = '1' then
-                    v_count := v_count + 1;
-                end if;
-            end loop;
-        end procedure;
+        
         procedure apply_reset is
         begin
             reset <= '1';
@@ -237,11 +214,11 @@ begin
         begin
             for g in 1 to gap_cycles loop
                 sample_valid <= '0';
-                wait_enabled_edges(1);
+                step(1);
             end loop;
             sample_valid <= '1';
             sample_data  <= to_signed(value, sample_data'length);
-            wait_enabled_edges(1);
+            step(1);
         end procedure;
 
         -- input back to idle: no transfer on the next edge
@@ -279,13 +256,13 @@ begin
             variable v_edges       : natural  := 0;
         begin
             while not sb.is_empty(VOID) and v_edges < C_DRAIN_LIMIT loop
-                wait_enabled_edges(1);
+                step(1);
                 v_edges := v_edges + 1;
             end loop;
             check_value(sb.is_empty(VOID), ERROR,
             "drain timeout: " & to_string(sb.get_pending_count(VOID)) &
             " expected bit(s) not received within " & to_string(C_DRAIN_LIMIT) & " enabled edges");
-            wait_enabled_edges(C_RX_LATENCY + 1); -- room for a stray extra bit
+            step(C_RX_LATENCY + 1); -- room for a stray extra bit
             check_value(bit_valid, '0', ERROR, "bit_valid high when no bit is expected");
         end procedure;
     begin
@@ -341,18 +318,6 @@ begin
             send_symbol('0');
             drain;
         end loop;
-
-        log(ID_LOG_HDR, "clk_en patterns");
-        for i in 0 to 2 loop
-            case i is
-                when 0      => s_en_pattern      <= "1010";
-                when 1      => s_en_pattern      <= "1101";
-                when others => s_en_pattern <= "1000";
-            end case;
-            send_bits("0101");
-            drain;
-        end loop;
-        s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "sample_valid patterns");
         for i in 0 to 2 loop

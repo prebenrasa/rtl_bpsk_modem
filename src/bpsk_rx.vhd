@@ -5,7 +5,7 @@
 -- Generics
 --   GC_SAMPLE_WIDTH : width of sample_data in bits (two's complement), and the
 --                     NCO amplitude width L. Range >= 2.
---   GC_SPS          : samples per symbol: one bit lasts GC_SPS clk_en pulses.
+--   GC_SPS          : samples per symbol: one bit lasts GC_SPS valid samples.
 --                     Must satisfy 2*GC_CCPS < GC_SPS (Nyquist, asserted).
 --   GC_CCPS         : carrier cycles per symbol. Carrier frequency =
 --                     GC_CCPS / GC_SPS cycles per sample. Range >= 1.
@@ -20,7 +20,6 @@
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
---   clk_en : Each clock with clk_en = '1'.
 --
 -- Reset
 --   async. active high.
@@ -28,18 +27,19 @@
 --                      A symbol being received is abandoned.
 --
 -- Input handshake 
---   one sample per clk_en and sample_valid. no backpressure.
+--   one sample per sample_valid. no backpressure.
 --
 -- Output
 --   bit valid is a one clk pulse. bit_data holds its value until the next output. 
 --   bit_trust is updated with bit_data: '1' when |correlation| >= GC_CORR_THRESHOLD.
 --   
 --
--- Timing (clk_en = '1' every clock)
+-- Timing (valid every clock)
 --   Latency : 2 clocks from the edge that takes the last symbol
 --   Rate    : one bit per GC_SPS accepted samples
 --
 -- Notes
+--   - Samples are qualified by sample valid strobe from upstream.
 --   - The carrier assumes an integer NCO step (see GC_CCPS). Otherwise the
 --     carrier phase drifts relative to the symbol boundaries.
 --------------------------------------------------------------------------------
@@ -59,7 +59,6 @@ entity bpsk_rx is
     );
     port (
         clk          : in std_logic;
-        clk_en       : in std_logic;
         reset        : in std_logic;
         sample_data  : in signed(GC_SAMPLE_WIDTH - 1 downto 0);
         sample_valid : in std_logic;
@@ -104,7 +103,6 @@ begin
     assert C_STEP_NUM mod GC_SPS = 0
         report "NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS is not an integer: carrier phase drifts" severity failure;
 
-    s_sample_en <= clk_en and sample_valid;
     s_last      <= '1' when (s_count = GC_SPS - 1) else
     '0';
 
@@ -114,7 +112,7 @@ begin
         if reset = '1' then
             s_count <= 0;
         elsif rising_edge(clk) then
-            if s_sample_en = '1' then -- current sample is being processed.
+            if sample_valid = '1' then -- current sample is being processed.
                 if s_last = '1' then
                     s_count <= 0;
                 else
@@ -132,7 +130,7 @@ begin
         )
         port map(
             clk        => clk,
-            clk_en     => s_sample_en, -- carrier advances only while receiving: phase 0 at each symbol start (if tx and rx are reset together)
+            clk_en     => sample_valid, -- carrier advances only while receiving: phase 0 at each symbol start (if tx and rx are reset together)
             reset      => reset,
             step_size  => C_STEP_SIZE,
             sine_valid => s_sine_valid,
@@ -151,11 +149,11 @@ begin
     p_align_ctrl : process (clk)
     begin
         if rising_edge(clk) then
-            s_last_dly <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and s_sample_en);
+            s_last_dly <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
         end if;
     end process;
 
-    -- output: use correlator to decide bit value --> sum of sample × local carrier over one symbol
+    -- output: use correlator to decide bit value --> sum of sample x local carrier over one symbol
     -- decision rule: corr > 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
     p_output : process (clk, reset)
         variable v_sum : signed(s_decision_accumulator'range); -- combinational: acc + this cycle's product
