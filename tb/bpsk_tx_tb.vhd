@@ -1,36 +1,27 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
-use ieee.math_real.all;
 
 library uvvm_util;
 context uvvm_util.uvvm_util_context;
 
 library bitvis_vip_scoreboard;
 use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
+use work.bpsk_tb_pkg.all;
 
 entity bpsk_tx_tb is
     generic (
-        GC_SAMPLE_WIDTH : positive := 8;
-        GC_SPS          : positive := 32;
-        GC_CCPS         : positive := 8;
-        GC_PHASE_WIDTH  : positive := 24;
-        GC_ADDR_WIDTH   : positive := 8
+        GC_SAMPLE_WIDTH : positive := work.bpsk_pkg.C_DEFAULT_SAMPLE_WIDTH;
+        GC_SPS          : positive := work.bpsk_pkg.C_DEFAULT_SPS;
+        GC_CCPS         : positive := work.bpsk_pkg.f_default_ccps(GC_SPS);
+        GC_PHASE_WIDTH  : positive := work.bpsk_pkg.C_DEFAULT_PHASE_WIDTH;
+        GC_ADDR_WIDTH   : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH
     );
 end entity bpsk_tx_tb;
 
 architecture bhv of bpsk_tx_tb is
-    -- constants
-    constant C_TCLK : time := 10 ns;
-
-    constant C_NCO_LATENCY : natural := 2;                 -- clocks from NCO clk_en to its valid sine_data
-    constant C_TX_LATENCY  : natural := 1 + C_NCO_LATENCY; -- number of clock cycles from edge bit is accepted to valid output
-
-    -- computed in unsigned so any GC_PHASE_WIDTH works
-    constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
-        shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
-    constant C_STEP_SIZE : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
-    constant C_AMPLITUDE : integer                               := 2 ** (GC_SAMPLE_WIDTH - 1) - 1;
+    -- constants: timing and models come from bpsk_tb_pkg
+    constant C_CFG : t_bpsk_cfg := f_bpsk_cfg(GC_SAMPLE_WIDTH, GC_SPS, GC_CCPS, GC_PHASE_WIDTH, GC_ADDR_WIDTH);
 
     constant C_SAMPLE_DEFAULT : signed(GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
 
@@ -50,36 +41,18 @@ architecture bhv of bpsk_tx_tb is
     shared variable sb   : bitvis_vip_scoreboard.int_sb_pkg.t_generic_sb; -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT;    -- watchdog
 
-    -- reference model: expected output for an accumulator value
-    function f_expected_sine(constant phase : unsigned) return integer is
-        constant C_ADDRESS                      : natural := to_integer(phase(phase'high downto phase'high - GC_ADDR_WIDTH + 1));
-    begin
-        return integer(round(sin(MATH_2_PI * real(C_ADDRESS) / real(2 ** GC_ADDR_WIDTH)) * real(C_AMPLITUDE)));
-        -- alternatively: integer(round(sin(MATH_2_PI * real(GC_CCPS * sample_index) / real(GC_SPS))* real(C_AMPLITUDE)));
-    end function;
-
-    function f_expected(constant bit_value : std_logic; constant phase : unsigned) return integer is
-    begin
-        if bit_value = '1' then
-            return f_expected_sine(phase);
-        else
-            return -f_expected_sine(phase);
-        end if;
-    end function;
-
+    -- reference model: the GC_SPS samples expected for an accepted bit
     procedure add_expected_bit (constant bit_value : std_logic) is
-        variable v_phase                               : unsigned(GC_PHASE_WIDTH - 1 downto 0) := (others => '0');
     begin
         for i in 0 to GC_SPS - 1 loop
-            sb.add_expected(f_expected(bit_value, v_phase));
-            v_phase := v_phase + C_STEP_SIZE;
+            sb.add_expected(f_tx_sample(C_CFG, bit_value, i));
         end loop;
     end procedure;
 begin
-    assert C_STEP_NUM mod GC_SPS = 0
+    assert f_step_is_exact(C_CFG)
         report "step size is not an integer: GC_CCPS * 2**GC_PHASE_WIDTH must be a multiple of GC_SPS"
         severity failure;
-        
+
     clock_generator(clk, C_TCLK);
     watchdog_timer(watchdog_ctrl, 500 us, FAILURE, "bpsk_tx simulation hung");
 
@@ -176,24 +149,6 @@ begin
     end process;
 
     p_stimulus : process
-        procedure step(constant n : positive := 1) is
-        begin
-            wait_num_rising_edge_plus_margin(clk, n, C_TCLK/4);
-        end procedure;
-
-        procedure wait_enabled_edges(constant n : positive) is
-            variable v_count                        : natural := 0;
-            variable v_enabled                      : std_logic;
-        begin
-            while v_count < n loop
-                v_enabled := clk_en; -- value the next edge will sample
-                step(1);
-                if v_enabled = '1' then
-                    v_count := v_count + 1;
-                end if;
-            end loop;
-        end procedure;
-
         procedure send_bit (constant bit_value : std_logic) is
         begin
             bit_data  <= bit_value;
@@ -204,20 +159,13 @@ begin
             bit_valid <= '0';
         end procedure;
 
-        procedure apply_reset is
-        begin
-            reset <= '1';
-            step(1);
-            reset <= '0';
-        end procedure;
-
         procedure drain is -- wait until every expected sample has arrived, then check nothing else follows
         begin
             loop
-                step(1);
+                step(clk, 1);
                 exit when sb.is_empty(VOID);
             end loop;
-            wait_enabled_edges(C_TX_LATENCY + 1); -- room for a stray extra sample
+            wait_enabled_edges(clk, clk_en, C_TX_LATENCY + 1); -- room for a stray extra sample
             check_value(sb.is_empty(VOID), ERROR, "every expected sample was received");
             check_value(sample_valid, '0', ERROR, "valid low when idle");
         end procedure;
@@ -239,7 +187,7 @@ begin
         s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "Reset, then recover");
-        apply_reset;
+        apply_reset(clk, reset);
         check_value(sample_valid, '0', ERROR, "valid low after reset");
         check_value(bit_ready, '1', ERROR, "bit_ready high after reset");
         send_bit('1');
@@ -249,7 +197,7 @@ begin
         send_bit('1');
         for i in 1 to C_TX_LATENCY loop
             check_value(sample_valid, '0', ERROR, "valid low during latency");
-            step(1);
+            step(clk, 1);
         end loop;
         check_value(sample_valid, '1', ERROR, "valid high after latency");
         drain;
@@ -287,9 +235,9 @@ begin
         for i in 0 to GC_SPS + C_TX_LATENCY loop
             send_bit('1');
             if i > 0 then
-                step(i);
+                step(clk, i);
             end if;
-            apply_reset;
+            apply_reset(clk, reset);
             check_value(sample_valid, '0', ERROR, "valid low after reset, i=" & to_string(i));
             check_value(sample_data, C_SAMPLE_DEFAULT, ERROR, "sample default after reset, i=" & to_string(i));
             check_value(bit_ready, '1', ERROR, "ready high after reset, i=" & to_string(i));

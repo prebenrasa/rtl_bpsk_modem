@@ -8,16 +8,16 @@ context uvvm_util.uvvm_util_context;
 
 library bitvis_vip_scoreboard;
 use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
-use work.bpsk_rx_sb_support_pkg.all;
+use work.bpsk_tb_pkg.all;
 
 entity bpsk_modem_tb is
     generic (
-        GC_SAMPLE_WIDTH   : positive := 8;
-        GC_SPS            : positive := 32;
-        GC_CCPS           : positive := 8;
-        GC_PHASE_WIDTH    : positive := 24;
-        GC_ADDR_WIDTH     : positive := 8;
-        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2
+        GC_SAMPLE_WIDTH   : positive := work.bpsk_pkg.C_DEFAULT_SAMPLE_WIDTH;
+        GC_SPS            : positive := work.bpsk_pkg.C_DEFAULT_SPS;
+        GC_CCPS           : positive := work.bpsk_pkg.f_default_ccps(GC_SPS);
+        GC_PHASE_WIDTH    : positive := work.bpsk_pkg.C_DEFAULT_PHASE_WIDTH;
+        GC_ADDR_WIDTH     : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH;
+        GC_CORR_THRESHOLD : positive := work.bpsk_pkg.f_default_corr_threshold(GC_SAMPLE_WIDTH)
     );
 end entity bpsk_modem_tb;
 
@@ -46,7 +46,7 @@ architecture bhv of bpsk_modem_tb is
     -- tb helpers
     signal s_en_pattern : std_logic_vector(0 to 3) := "1111"; -- cycled one bit per clock
 
-    shared variable sb   : work.bpsk_rx_sb_pkg.t_generic_sb;           -- scoreboard
+    shared variable sb   : work.bpsk_bit_sb_pkg.t_generic_sb;           -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT; -- watchdog
 
 begin
