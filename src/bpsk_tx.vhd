@@ -65,13 +65,16 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+use work.bpsk_pkg.all;
+use work.nco_pkg.all;
+
 entity bpsk_tx is
     generic (
-        GC_SAMPLE_WIDTH : positive := 8;          -- Bit width of tx output samples and NCO L output amplitude width
-        GC_SPS          : positive := 32;         -- Samples per Symbol (SPS) 
-        GC_CCPS         : positive := (GC_SPS/4); -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH  : positive := 24;         -- N accumulator width
-        GC_ADDR_WIDTH   : positive := 10          -- M LUT address = top M bits of the phase
+        GC_SAMPLE_WIDTH : positive := C_DEFAULT_SAMPLE_WIDTH; -- Bit width of transmitted samples and NCO L output amplitude width
+        GC_SPS          : positive := C_DEFAULT_SPS;          -- Samples per Symbol (SPS) 
+        GC_CCPS         : positive := f_default_ccps(GC_SPS); -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH  : positive := C_DEFAULT_PHASE_WIDTH;  -- N accumulator width
+        GC_ADDR_WIDTH   : positive := C_DEFAULT_ADDR_WIDTH    -- M LUT address = top M bits of the phase
     );
     port (
         clk          : in std_logic;                             -- system clock
@@ -83,19 +86,14 @@ entity bpsk_tx is
         sample_data  : out signed(GC_SAMPLE_WIDTH - 1 downto 0); -- modulated sample, zero when not valid
         sample_valid : out std_logic                             -- sample_data holds a valid sample
     );
-begin
-    assert 2 * GC_CCPS < GC_SPS
-    report "Nyquist theorem: Need more than 2 samples per carrier cycle. Increase GC_SPS and/or decrease GC_CCPS" severity failure;
 end entity bpsk_tx;
 
 architecture rtl of bpsk_tx is
-    -- carrier, computed in unsigned so any GC_PHASE_WIDTH works
-    constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
-        shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
-    constant C_STEP_SIZE   : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
-    constant C_NCO_LATENCY : natural                               := 2; -- clocks from NCO clk_en to its valid sine_data. Must match NCO
+    -- check carrier generics
+    constant C_CARRIER_OK : boolean := f_check_carrier(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
 
-    constant C_SAMPLE_DEFAULT : signed(GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
+    constant C_STEP_SIZE      : unsigned(GC_PHASE_WIDTH - 1 downto 0) := f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
+    constant C_SAMPLE_DEFAULT : signed(GC_SAMPLE_WIDTH - 1 downto 0)  := (others => '0');
 
     -- control (reset) signals
     signal s_count : integer range 0 to GC_SPS - 1 := 0;   -- sample index within current symbol
@@ -122,10 +120,6 @@ architecture rtl of bpsk_tx is
     signal s_sample_valid : std_logic                            := '0';
 
 begin
-    assert C_STEP_NUM mod GC_SPS = 0
-        report "step size is not an integer: GC_CCPS * 2**GC_PHASE_WIDTH must be a multiple of GC_SPS"
-        severity failure;
-
     -- handshake: ready when idle, and on last sample of symbol to allow zero-gap after completed transmission
     s_ready <= clk_en and (not s_busy or s_last);
     s_last  <= '1' when s_busy = '1' and (s_count = GC_SPS - 1) else

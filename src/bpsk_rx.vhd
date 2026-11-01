@@ -35,7 +35,7 @@
 --   bit_trust is updated with bit_data: '1' when |correlation| >= GC_CORR_THRESHOLD.
 --   
 --
--- Timing (valid every clock)
+-- Timing (sample_valid every clock)
 --   Latency : 4 clocks from the edge that takes the last sample of a symbol
 --   Rate    : one bit per GC_SPS accepted samples
 --
@@ -49,14 +49,17 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use ieee.math_real.all;
 
+use work.bpsk_pkg.all;
+use work.nco_pkg.all;
+
 entity bpsk_rx is
     generic (
-        GC_SAMPLE_WIDTH   : positive := 8;                                 -- Bit width of received samples and NCO L output amplitude width
-        GC_SPS            : positive := 32;                                -- Samples per Symbol (SPS) 
-        GC_CCPS           : positive := (GC_SPS/4);                        -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH    : positive := 24;                                -- N accumulator width
-        GC_ADDR_WIDTH     : positive := 10;                                -- M LUT address = top M bits of the phase
-        GC_CORR_THRESHOLD : positive := (2 ** (GC_SAMPLE_WIDTH - 1) - 1)/2 -- threshold for classifying decision as trustworthy
+        GC_SAMPLE_WIDTH   : positive := C_DEFAULT_SAMPLE_WIDTH;                   -- Bit width of received samples and NCO L output amplitude width
+        GC_SPS            : positive := C_DEFAULT_SPS;                            -- Samples per Symbol (SPS) 
+        GC_CCPS           : positive := f_default_ccps(GC_SPS);                   -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                    -- N accumulator width
+        GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                     -- M LUT address = top M bits of the phase
+        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH) -- threshold for classifying decision as trustworthy
     );
     port (
         clk          : in std_logic;
@@ -67,18 +70,14 @@ entity bpsk_rx is
         bit_valid    : out std_logic;
         bit_trust    : out std_logic
     );
-begin
-    assert 2 * GC_CCPS < GC_SPS
-    report "Nyquist theorem: Need more than 2 samples per carrier cycle. Increase GC_SPS and/or decrease GC_CCPS" severity failure;
 end entity bpsk_rx;
 
 architecture rtl of bpsk_rx is
-    -- carrier, computed in unsigned so any GC_PHASE_WIDTH works
-    constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
-    shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
-    constant C_STEP_SIZE   : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
-    constant C_NCO_LATENCY : natural                               := 2; -- clocks from NCO clk_en to its valid sine_data. Must match NCO
-    constant C_ACC_WIDTH   : natural                               := 2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS))));
+    -- check carrier generics
+    constant C_CARRIER_OK : boolean := f_check_carrier(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
+
+    constant C_STEP_SIZE : unsigned(GC_PHASE_WIDTH - 1 downto 0) := f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
+    constant C_ACC_WIDTH : natural                               := 2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS))));
 
     -- control (reset) signals
     signal s_count : integer range 0 to GC_SPS - 1 := 0; -- sample index within current symbol
@@ -103,15 +102,13 @@ architecture rtl of bpsk_rx is
     signal s_decision_done        : std_logic                                := '0'; -- high when s_decision_accumulator holds new symbol
     signal s_sine_valid_m         : std_logic                                := '0'; -- registers sine_valid value during multiply stage
     signal s_last_m               : std_logic                                := '0'; -- registers last value during multiply stage
-    signal s_first_m               : std_logic                                := '0'; -- registers first value during multiply stage
+    signal s_first_m              : std_logic                                := '0'; -- registers first value during multiply stage
 
     -- output 
     signal s_bit_data  : std_logic;
     signal s_bit_valid : std_logic;
     signal s_bit_trust : std_logic;
 begin
-    assert C_STEP_NUM mod GC_SPS = 0
-    report "NCO step GC_CCPS * 2**GC_PHASE_WIDTH / GC_SPS is not an integer: carrier phase drifts" severity failure;
 
     s_last <= '1' when (s_count = GC_SPS - 1) else
         '0';
@@ -166,16 +163,16 @@ begin
         end if;
     end process;
 
-    -- stage 2: accumulate
+    -- stage 1: multiply. stage 2: accumulate.
     p_decision_data : process (clk)
     begin
         if rising_edge(clk) then
             s_decision_product <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
 
-            if s_sine_valid_m then
-                if s_first_m then
+            if s_sine_valid_m = '1' then
+                if s_first_m = '1' then
                     s_decision_accumulator <= resize(s_decision_product, s_decision_accumulator'length);
-                else 
+                else
                     s_decision_accumulator <= s_decision_accumulator + s_decision_product;
                 end if;
             end if;
@@ -187,19 +184,20 @@ begin
     p_output : process (clk, reset)
     begin
         if reset = '1' then
-            s_bit_data             <= '0';
-            s_bit_valid            <= '0';
-            s_bit_trust            <= '0';
-            s_decision_done        <= '0';
-            s_sine_valid_m         <= '0';
-            s_last_m               <= '0';
-            s_first_m               <= '0';
+            s_bit_data      <= '0';
+            s_bit_valid     <= '0';
+            s_bit_trust     <= '0';
+            s_decision_done <= '0';
+            s_sine_valid_m  <= '0';
+            s_last_m        <= '0';
+            s_first_m       <= '0';
         elsif rising_edge(clk) then
-            -- stage 1: multiply and register ctrl and data signals in the current cycle
+            -- stage 1: ctrl and data for multiply stage (in p_decision_data)
             s_sine_valid_m <= s_sine_valid;
             s_last_m       <= s_sine_valid and s_last_dly(s_last_dly'high);
-            s_first_m       <= s_sine_valid and s_first_dly(s_first_dly'high);
+            s_first_m      <= s_sine_valid and s_first_dly(s_first_dly'high);
 
+            -- stage 2: accumulate is done and accmulator holds the symbol correlation
             s_decision_done <= s_sine_valid_m and s_last_m;
 
             -- stage 3: decision
