@@ -39,6 +39,8 @@ package bpsk_pkg is
     constant C_DEFAULT_PHASE_WIDTH  : positive := 24; -- N: NCO accumulator width
     constant C_DEFAULT_ADDR_WIDTH   : positive := 10; -- M: LUT address = top M bits of the phase
 
+    constant C_DIFF_REFERENCE : std_logic := '0'; -- d(-1): the symbol state of tx (and rx) after reset
+
     -- default carrier cycles per symbol for a given GC_SPS
     function f_default_ccps(sps : positive) return positive;
 

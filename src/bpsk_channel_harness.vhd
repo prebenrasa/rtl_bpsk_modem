@@ -16,7 +16,8 @@ entity bpsk_channel_harness is
         GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH); -- threshold for classifying decision as trustworthy
         GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
         GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
-        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
+        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8;                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
+        GC_DIFF_ENCODING  : boolean  := false -- differential encoding in bpsk_tx, decoding in bpsk_rx
     );
     port (
         clk             : in std_logic;                             -- system clock
@@ -43,7 +44,8 @@ begin
             GC_SPS          => GC_SPS,
             GC_CCPS         => GC_CCPS,
             GC_PHASE_WIDTH  => GC_PHASE_WIDTH,
-            GC_ADDR_WIDTH   => GC_ADDR_WIDTH
+            GC_ADDR_WIDTH    => GC_ADDR_WIDTH,
+            GC_DIFF_ENCODING => GC_DIFF_ENCODING
         )
         port map(
             clk          => clk,
@@ -66,7 +68,8 @@ begin
             GC_CORR_THRESHOLD => GC_CORR_THRESHOLD,
             GC_KP             => GC_KP,
             GC_KI             => GC_KI,
-            GC_FREQ_LIMIT     => GC_FREQ_LIMIT
+            GC_FREQ_LIMIT     => GC_FREQ_LIMIT,
+            GC_DIFF_ENCODING  => GC_DIFF_ENCODING
         )
         port map(
             clk          => clk,

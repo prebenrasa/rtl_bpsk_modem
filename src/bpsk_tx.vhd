@@ -14,6 +14,9 @@
 --   GC_PHASE_WIDTH   : NCO phase accumulator width N. Sets frequency resolution.
 --   GC_ADDR_WIDTH    : sine LUT address width M (2**M entries), taken from the
 --                     top M bits of the phase. Must be <= GC_PHASE_WIDTH.
+--   GC_DIFF_ENCODING : true: each symbol is the bit xor the previous symbol,
+--                     so a 180 degree carrier inversion at the receiver cancels
+--                     out. false: the symbol is the bit. Default false.
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
@@ -30,6 +33,8 @@
 --   state after reset: bpsk_tx is idle and waiting for bit input . 
 --                      A symbol being sent is abandoned; its remaining samples are not
 --                      output.
+--                      GC_DIFF_ENCODING: the encoder's previous symbol is
+--                      C_DIFF_REFERENCE ('0'), the same reference as bpsk_rx.
 --
 -- Input handshake 
 --   A bit is accepted at a rising edge where bit_valid = '1' and bit_ready = '1'.
@@ -41,7 +46,8 @@
 --
 -- Output
 --   sample_data is registered and qualified by sample_valid: one sample per clk_en
---   while sending, with bit 1 = +sin and bit 0 = -sin.
+--   while sending, with symbol 1 = +sin and symbol 0 = -sin. The symbol is the
+--   bit, or with GC_DIFF_ENCODING the bit xor the previous symbol.
 --   When idle or clk_en = '0': sample_valid = '0' and sample_data = 0.
 --   No backpressure: the sink must accept every valid sample.
 --
@@ -70,11 +76,12 @@ use work.nco_pkg.all;
 
 entity bpsk_tx is
     generic (
-        GC_SAMPLE_WIDTH : positive := C_DEFAULT_SAMPLE_WIDTH; -- Bit width of transmitted samples and NCO L output amplitude width
-        GC_SPS          : positive := C_DEFAULT_SPS;          -- Samples per Symbol (SPS) 
-        GC_CCPS         : positive := f_default_ccps(GC_SPS); -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH  : positive := C_DEFAULT_PHASE_WIDTH;  -- N accumulator width
-        GC_ADDR_WIDTH   : positive := C_DEFAULT_ADDR_WIDTH    -- M LUT address = top M bits of the phase
+        GC_SAMPLE_WIDTH  : positive := C_DEFAULT_SAMPLE_WIDTH; -- Bit width of transmitted samples and NCO L output amplitude width
+        GC_SPS           : positive := C_DEFAULT_SPS;          -- Samples per Symbol (SPS) 
+        GC_CCPS          : positive := f_default_ccps(GC_SPS); -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH   : positive := C_DEFAULT_PHASE_WIDTH;  -- N accumulator width
+        GC_ADDR_WIDTH    : positive := C_DEFAULT_ADDR_WIDTH;   -- M LUT address = top M bits of the phase
+        GC_DIFF_ENCODING : boolean  := false                   -- differential encoding of the bits
     );
     port (
         clk          : in std_logic;                             -- system clock
@@ -149,11 +156,17 @@ begin
     end process;
 
     -- datapath: the bit being transmitted.
-    p_bit_data : process (clk)
+    p_bit_data : process (clk, reset)
     begin
-        if rising_edge(clk) then
+        if reset = '1' then
+            s_bit_data <= C_DIFF_REFERENCE;
+        elsif rising_edge(clk) then
             if s_accept = '1' then
-                s_bit_data <= bit_data;
+                if GC_DIFF_ENCODING = true then
+                    s_bit_data <= bit_data xor s_bit_data;
+                else
+                    s_bit_data <= bit_data;
+                end if;
             end if;
         end if;
     end process;

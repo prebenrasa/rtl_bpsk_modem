@@ -30,6 +30,9 @@
 --                     s_freq) saturate at +-GC_FREQ_LIMIT instead of
 --                     wrapping. Default: an eighth of the nominal step
 --                     (+-12.5 % of the carrier frequency).
+--   GC_DIFF_ENCODING : true: each symbol is the bit xor the previous symbol,
+--                     so a 180 degree carrier inversion at the receiver cancels
+--                     out. false: the symbol is the bit. Default false.
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
@@ -37,8 +40,11 @@
 --
 -- Reset
 --   async. active high.
---   state after reset: bpsk_rx is idle and waiting for samples. 
+--   state after reset: bpsk_rx is idle and waiting for samples.
 --                      A symbol being received is abandoned.
+--                      GC_DIFF_ENCODING: the decoder's previous symbol is
+--                      C_DIFF_REFERENCE ('0'), the same reference as bpsk_tx,
+--                      and the previous trust is '0'.
 --
 -- Input handshake 
 --   one sample per sample_valid. no backpressure.
@@ -46,7 +52,11 @@
 -- Output
 --   bit_valid is a one clk pulse. bit_data holds its value until the next output. 
 --   bit_trust is updated with bit_data: '1' when |correlation| >= GC_CORR_THRESHOLD.
---   
+--   GC_DIFF_ENCODING: bit_data = symbol(n) xor symbol(n-1), with symbol the raw
+--   decision (sign of the correlation). A decoded bit depends on two decisions,
+--   so bit_trust = trust(n) and trust(n-1).
+--   First bit after reset: decoded against C_DIFF_REFERENCE, so it is only
+--   correct if the loop has locked at 0 degrees.
 --
 -- Timing (sample_valid every clock)
 --   Latency : 4 clocks from the edge that takes the last sample of a symbol
@@ -57,7 +67,9 @@
 --   - Carrier phase is recovered by a Costas loop: every valid sample, the
 --     error sign(I) * Q adjusts the NCO step, with I and Q the moving sums of
 --     sample * carrier over the last GC_SPS samples. It locks
---     at 0 or 180 degrees; at 180 degrees every bit is inverted.
+--     at 0 or 180 degrees; at 180 degrees every symbol decision is inverted.
+--     Without GC_DIFF_ENCODING every bit is then inverted; with it the
+--     inversion cancels in symbol(n) xor symbol(n-1).
 --   - Loop delay: the step updates 3 clocks after the moving sums (error,
 --     integral, step), and the NCO adds C_NCO_LATENCY before the new phase
 --     reaches the multipliers.
@@ -77,15 +89,16 @@ use work.nco_pkg.all;
 
 entity bpsk_rx is
     generic (
-        GC_SAMPLE_WIDTH   : positive := C_DEFAULT_SAMPLE_WIDTH;                                     -- Bit width of received samples and NCO L output amplitude width
-        GC_SPS            : positive := C_DEFAULT_SPS;                                              -- Samples per Symbol (SPS) 
-        GC_CCPS           : positive := f_default_ccps(GC_SPS);                                     -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                                      -- N accumulator width
-        GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                                       -- M LUT address = top M bits of the phase
-        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH);                  -- threshold for classifying decision as trustworthy
-        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH);      -- loop proportional gain 2**-GC_KP
-        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                                -- loop integral gain 2**-GC_KI
-        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8 -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
+        GC_SAMPLE_WIDTH   : positive := C_DEFAULT_SAMPLE_WIDTH;                                      -- Bit width of received samples and NCO L output amplitude width
+        GC_SPS            : positive := C_DEFAULT_SPS;                                               -- Samples per Symbol (SPS) 
+        GC_CCPS           : positive := f_default_ccps(GC_SPS);                                      -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                                       -- N accumulator width
+        GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                                        -- M LUT address = top M bits of the phase
+        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH);                   -- threshold for classifying decision as trustworthy
+        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH);       -- loop proportional gain 2**-GC_KP
+        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                                 -- loop integral gain 2**-GC_KI
+        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8; -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
+        GC_DIFF_ENCODING  : boolean  := false                                                        -- differential encoding of the bits
     );
     port (
         clk          : in std_logic;
@@ -149,9 +162,11 @@ architecture rtl of bpsk_rx is
     signal s_last_m           : std_logic                                := '0'; -- registers last value during multiply stage
 
     -- output 
-    signal s_bit_data  : std_logic;
-    signal s_bit_valid : std_logic;
-    signal s_bit_trust : std_logic;
+    signal s_symbol_prev    : std_logic; -- previous raw symbol decision d^(n-1): decoder state (GC_DIFF_ENCODING)
+    signal s_bit_data       : std_logic;
+    signal s_bit_valid      : std_logic;
+    signal s_bit_trust_prev : std_logic; -- trust of the previous symbol decision (GC_DIFF_ENCODING)
+    signal s_bit_trust      : std_logic;
 begin
 
     assert GC_FREQ_LIMIT < 2 ** (GC_PHASE_WIDTH - 1)
@@ -319,14 +334,18 @@ begin
     -- output: use correlator to decide bit value --> sum of sample x local carrier over one symbol
     -- decision rule: corr > 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
     p_output : process (clk, reset)
+        variable v_symbol : std_logic := '0';
+        variable v_trust  : std_logic := '0';
     begin
         if reset = '1' then
-            s_bit_data      <= '0';
-            s_bit_valid     <= '0';
-            s_bit_trust     <= '0';
-            s_decision_done <= '0';
-            s_sine_valid_m  <= '0';
-            s_last_m        <= '0';
+            s_symbol_prev    <= C_DIFF_REFERENCE;
+            s_bit_data       <= '0';
+            s_bit_valid      <= '0';
+            s_bit_trust      <= '0';
+            s_bit_trust_prev <= '0';
+            s_decision_done  <= '0';
+            s_sine_valid_m   <= '0';
+            s_last_m         <= '0';
         elsif rising_edge(clk) then
             -- stage 1: ctrl and data for multiply stage (in p_decision_storage)
             s_sine_valid_m <= s_sine_valid;
@@ -338,11 +357,18 @@ begin
             -- stage 3: decision
             s_bit_valid <= s_decision_done;
             if s_decision_done = '1' then
-                s_bit_data <= not s_sine_accumulator(s_sine_accumulator'high);
-                if s_sine_accumulator < GC_CORR_THRESHOLD and s_sine_accumulator > (-GC_CORR_THRESHOLD) then
-                    s_bit_trust <= '0';
+                v_symbol := not s_sine_accumulator(s_sine_accumulator'high);
+                v_trust  := '0' when s_sine_accumulator < GC_CORR_THRESHOLD and s_sine_accumulator > (-GC_CORR_THRESHOLD) else
+                    '1';
+
+                if GC_DIFF_ENCODING = true then
+                    s_bit_data       <= v_symbol xor s_symbol_prev;
+                    s_symbol_prev    <= v_symbol;
+                    s_bit_trust      <= v_trust and s_bit_trust_prev;
+                    s_bit_trust_prev <= v_trust;
                 else
-                    s_bit_trust <= '1';
+                    s_bit_data  <= v_symbol;
+                    s_bit_trust <= v_trust;
                 end if;
             end if;
         end if;
