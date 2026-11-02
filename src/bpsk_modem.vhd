@@ -74,7 +74,7 @@ entity bpsk_modem is
         GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
         GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
         GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8;                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
-        GC_DIFF_ENCODING  : boolean  := false -- differential encoding in bpsk_tx, decoding in bpsk_rx
+        GC_DIFF_ENCODING  : boolean  := true -- differential encoding in bpsk_tx, decoding in bpsk_rx
     );
     port (
         clk          : in std_logic;  -- system clock
