@@ -5,8 +5,10 @@
 #  Comments stay on their own lines: text after a value on the same line adds trailing spaces to it.
 # =============================================================================
 
-# ---- Machine-specific settings (tool and library paths) go in local.mk, which git ignores;
+# ---- Machine-specific settings (tool and library paths, local targets) go in local.mk, which git ignores;
 # copy local.mk.example to local.mk and edit it. Values given on the command line still win.
+# make with no target runs help, also when local.mk defines targets of its own
+.DEFAULT_GOAL := help
 -include local.mk
 
 # ---- Design selection (override on the command line, e.g. make sim TB=bpsk_rx_tb)
@@ -64,7 +66,7 @@ VIVADO_SCRIPT = $(abspath scripts)
 VIVADO_SRC_F  = $(abspath $(VIVADO_OUT))/sources.f
 write_sources_f = $(file >$(VIVADO_SRC_F)) $(foreach f,$(RTL_SRC),$(file >>$(VIVADO_SRC_F),$(f)))
 
-.PHONY: help check uvvm-lib sim sim-all cocotb test figures wave synth impl bit rtl open-synth open-impl reports save-reports clean
+.PHONY: help check uvvm-lib sim sim-all cocotb test wave synth impl bit rtl open-synth open-impl reports save-reports clean
 
 help:
 	@echo "Simulation (GHDL, VHDL-2008)"
@@ -72,7 +74,6 @@ help:
 	@echo "  make sim-all                  run every *_tb.vhd in each configuration of configs/sim_configs.txt, print pass/fail"
 	@echo "  make cocotb                   run the cocotb tests (tb/cocotb/) in each configuration, via pytest"
 	@echo "  make test                     sim-all + cocotb"
-	@echo "  make figures                  report simulations (tens of minutes) + figures into doc/figures/"
 	@echo "  make wave  [TB=$(TB)]         open the .ghw in $(WAVEVIEWER)"
 	@echo "Vivado (part $(PART))"
 	@echo "  make synth [TOP=$(TOP)]       synthesis -> $(VIVADO_OUT)/post_synth.dcp + reports"
@@ -81,7 +82,7 @@ help:
 	@echo "  make rtl   [TOP=$(TOP)]       open the elaborated RTL schematic in the Vivado GUI"
 	@echo "  make open-synth / open-impl [TOP=$(TOP)]   open a checkpoint in the Vivado GUI"
 	@echo "  make reports [TOP=$(TOP)]     list generated reports"
-	@echo "  make save-reports [TOP=$(TOP)]   copy key reports to $(REPORTS_DIR)/ (tracked in git)"
+	@echo "  make save-reports [TOP=$(TOP)]   copy key reports to $(REPORTS_DIR)/, outside build/"
 	@echo "Other"
 	@echo "  make check                    show tool versions and whether UVVM is compiled"
 	@echo "  make uvvm-lib                 compile UVVM from $(UVVM_DIR) into $(UVVM_LIB)"
@@ -149,11 +150,6 @@ cocotb:
 
 test: sim-all cocotb
 
-# report figures: the data-logging simulations, then the plots (see tb/cocotb/README.md, Report figures)
-figures:
-	$(UV) run pytest tb/cocotb/report_runner.py
-	$(UV) run --group dev python tb/cocotb/plot_report.py
-
 wave:
 	$(WAVEVIEWER) $(SIM_DIR)/$(TB).ghw &
 
@@ -185,7 +181,7 @@ open-impl:
 reports:
 	@ls -1 $(VIVADO_OUT)/reports 2>/dev/null || echo "No reports yet - run make synth / make impl"
 
-# copy the reports worth keeping from build/ (ignored by git) to reports/<TOP>/ (tracked);
+# copy the reports worth keeping from build/ to reports/<TOP>/, which make clean leaves alone;
 # override the list with e.g. make save-reports SAVE_REPORTS="post_route_power.rpt"
 REPORTS_DIR   = reports/$(TOP)
 SAVE_REPORTS ?= post_route_utilization.rpt post_synth_utilization_hier.rpt post_route_timing.rpt

@@ -8,11 +8,6 @@ dependencies = [
     "pytest-xdist>=3.8.0",
 ]
 
-[dependency-groups]
-dev = [
-    "matplotlib>=3.11.2",
-]
-
 [tool.pytest.ini_options]
 # one worker per CPU, each takes one configuration at a time when it is free (configurations differ a lot
 # in run time, so pre-assigned blocks leave a slow one queued behind another);
