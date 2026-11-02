@@ -22,19 +22,8 @@ entity bpsk_modem_tb is
 end entity bpsk_modem_tb;
 
 architecture bhv of bpsk_modem_tb is
-    -- constants
-    constant C_TCLK : time := 10 ns;
-
-    constant C_NCO_LATENCY   : natural := 2;                                    -- clocks from NCO clk_en to its valid sine_data
-    constant C_RX_LATENCY    : natural := C_NCO_LATENCY + 2;                    -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
-    constant C_TX_LATENCY    : natural := 1 + C_NCO_LATENCY;                    -- tx: clocks from the edge that accepts a bit to its first valid sample
-    constant C_MODEM_LATENCY : natural := C_RX_LATENCY + C_TX_LATENCY + GC_SPS; -- clocks from the edge that accepts a bit to rx_bit_valid
-
-    -- computed in unsigned so any GC_PHASE_WIDTH works
-    constant C_STEP_NUM : unsigned(GC_PHASE_WIDTH + 31 downto 0) :=
-    shift_left(resize(to_unsigned(GC_CCPS, 32), GC_PHASE_WIDTH + 32), GC_PHASE_WIDTH);
-    constant C_STEP_SIZE : unsigned(GC_PHASE_WIDTH - 1 downto 0) := resize(C_STEP_NUM / GC_SPS, GC_PHASE_WIDTH);
-    constant C_AMPLITUDE : integer                               := 2 ** (GC_SAMPLE_WIDTH - 1) - 1;
+    -- constants (C_TCLK, C_MARGIN and the spec latencies come from bpsk_tb_pkg)
+    constant C_MODEM_LATENCY : natural := f_modem_latency(GC_SPS); -- clocks from the edge that accepts a bit to rx_bit_valid
 
     -- entity signals
     signal clk    : std_logic := '0';
@@ -117,7 +106,7 @@ begin
         wait until rising_edge(clk);
         -- check reset behaviour
         if reset = '1' then
-            wait for C_TCLK/4; -- avoids immediate failure at start of simulation
+            wait for C_MARGIN; -- avoids immediate failure at start of simulation
             check_value(rx_bit_data, '0', "bit_data not low after reset");
             check_value(rx_bit_valid, '0', "bit_valid not low after reset");
         else
@@ -133,28 +122,6 @@ begin
     end process;
 
     p_stimulus : process
-        procedure step(constant n : positive := 1) is
-        begin
-            wait_num_rising_edge_plus_margin(clk, n, C_TCLK/4);
-        end procedure;
-        procedure wait_enabled_edges(constant n : positive) is
-            variable v_count                        : natural := 0;
-            variable v_enabled                      : std_logic;
-        begin
-            while v_count < n loop
-                v_enabled := clk_en; -- value the next edge will sample
-                step(1);
-                if v_enabled = '1' then
-                    v_count := v_count + 1;
-                end if;
-            end loop;
-        end procedure;
-        procedure apply_reset is
-        begin
-            reset <= '1';
-            step(1);
-            reset <= '0';
-        end procedure;
         procedure release_input is
         begin
             tx_bit_valid <= '0';
@@ -179,13 +146,13 @@ begin
             variable v_edges       : natural  := 0;
         begin
             while not sb.is_empty(VOID) and v_edges < C_DRAIN_LIMIT loop
-                wait_enabled_edges(1);
+                wait_enabled_edges(clk, clk_en, 1);
                 v_edges := v_edges + 1;
             end loop;
             check_value(sb.is_empty(VOID), ERROR,
             "drain timeout: " & to_string(sb.get_pending_count(VOID)) &
             " expected bit(s) not received within " & to_string(C_DRAIN_LIMIT) & " enabled edges");
-            wait_enabled_edges(C_MODEM_LATENCY + 1); -- room for a stray extra bit
+            wait_enabled_edges(clk, clk_en, C_MODEM_LATENCY + 1); -- room for a stray extra bit
             check_value(rx_bit_valid, '0', ERROR, "bit_valid high when no bit is expected");
         end procedure;
     begin
@@ -205,7 +172,7 @@ begin
         s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "Reset, then recover");
-        apply_reset;
+        apply_reset(clk, reset);
         check_value(rx_bit_data, '0', ERROR, "bit_data low after reset");
         check_value(rx_bit_valid, '0', ERROR, "bit_valid low after reset");
         check_value(tx_bit_ready, '1', ERROR, "bit_ready high after reset");
@@ -216,7 +183,7 @@ begin
         send_bit('1');
         for i in 1 to C_MODEM_LATENCY loop
             check_value(rx_bit_valid, '0', ERROR, "valid low during latency i=" & to_string(i));
-            step(1);
+            step(clk, 1);
         end loop;
         check_value(rx_bit_valid, '1', ERROR, "valid high after latency");
         drain;
@@ -235,9 +202,9 @@ begin
         for i in 0 to C_MODEM_LATENCY + 2 loop
             send_bit('1');
             if i > 0 then
-                step(i);
+                step(clk, i);
             end if;
-            apply_reset;
+            apply_reset(clk, reset);
             check_value(rx_bit_valid, '0', ERROR, "valid low after reset, i=" & to_string(i));
             check_value(rx_bit_data, '0', ERROR, "sample default after reset, i=" & to_string(i));
             check_value(tx_bit_ready, '1', ERROR, "ready high after reset, i=" & to_string(i));
