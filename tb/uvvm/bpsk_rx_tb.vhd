@@ -28,7 +28,7 @@ architecture bhv of bpsk_rx_tb is
 
     -- entity signals
     signal clk   : std_logic := '0';
-    signal reset : std_logic := '1';
+    signal reset_n : std_logic := '0';
 
     signal bit_data, bit_valid, bit_trust, sample_valid : std_logic := '0';
     signal sample_data                                  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
@@ -53,7 +53,7 @@ begin
         )
         port map(
             clk          => clk,
-            reset        => reset,
+            reset_n      => reset_n,
             sample_data  => sample_data,
             sample_valid => sample_valid,
             bit_data     => bit_data,
@@ -72,7 +72,7 @@ begin
         wait until rising_edge(clk);
 
         -- discard waiting bits in scoreboard
-        if reset = '1' then
+        if reset_n = '0' then
             v_symbol      := C_SYMBOL_EMPTY;
             v_prev_symbol := C_DIFF_REFERENCE;
             if not sb.is_empty(VOID) then
@@ -110,7 +110,7 @@ begin
     begin
         wait until rising_edge(clk);
         -- check reset behaviour
-        if reset = '1' then
+        if reset_n = '0' then
             v_first_bit := true;
             wait for C_MARGIN; -- avoids immediate failure at start of simulation
             check_value(bit_data, '0', "bit_data not low after reset");
@@ -143,7 +143,7 @@ begin
         -- reset the DUT and the encoder model together, as bpsk_tx and bpsk_rx are reset together
         procedure reset_dut is
         begin
-            apply_reset(clk, reset);
+            apply_reset(clk, reset_n);
             v_tx_symbol := C_DIFF_REFERENCE;
         end procedure;
 

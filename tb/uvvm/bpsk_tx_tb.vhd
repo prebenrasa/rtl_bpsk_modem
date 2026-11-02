@@ -30,7 +30,7 @@ architecture bhv of bpsk_tx_tb is
     -- entity signals
     signal clk    : std_logic := '0';
     signal clk_en : std_logic := '0';
-    signal reset  : std_logic := '1';
+    signal reset_n : std_logic := '0';
 
     signal bit_data, bit_valid, bit_ready, sample_valid : std_logic := '0';
     signal sample_data                                  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
@@ -70,7 +70,7 @@ begin
         port map(
             clk          => clk,
             clk_en       => clk_en,
-            reset        => reset,
+            reset_n      => reset_n,
             bit_data     => bit_data,
             bit_valid    => bit_valid,
             bit_ready    => bit_ready,
@@ -94,7 +94,7 @@ begin
     begin
         wait until rising_edge(clk);
         -- discard waiting samples in scoreboard
-        if reset = '1' then
+        if reset_n = '0' then
             v_pending := false;
             v_symbol  := C_DIFF_REFERENCE;
             if not sb.is_empty(VOID) then
@@ -128,7 +128,7 @@ begin
         wait until rising_edge(clk);
 
         --scoreboard
-        if reset = '0' and sample_valid = '1' then
+        if reset_n = '1' and sample_valid = '1' then
             sb.check_received(to_integer(sample_data));
         end if;
 
@@ -138,7 +138,7 @@ begin
         end if;
 
         -- track transmission
-        if reset = '1' then
+        if reset_n = '0' then
             v_run_length := 0;
         elsif v_en_dly(v_en_dly'high) = '1' then
             if sample_valid = '1' then -- transmission initiated/ongoing
@@ -195,7 +195,7 @@ begin
         s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "Reset, then recover");
-        apply_reset(clk, reset);
+        apply_reset(clk, reset_n);
         check_value(sample_valid, '0', ERROR, "valid low after reset");
         check_value(bit_ready, '1', ERROR, "bit_ready high after reset");
         send_bit('1');
@@ -241,7 +241,7 @@ begin
             if i > 0 then
                 step(clk, i);
             end if;
-            apply_reset(clk, reset);
+            apply_reset(clk, reset_n);
             check_value(sample_valid, '0', ERROR, "valid low after reset, i=" & to_string(i));
             check_value(sample_data, C_SAMPLE_DEFAULT, ERROR, "sample default after reset, i=" & to_string(i));
             check_value(bit_ready, '1', ERROR, "ready high after reset, i=" & to_string(i));

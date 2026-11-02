@@ -30,7 +30,7 @@ architecture bhv of bpsk_modem_tb is
     -- entity signals
     signal clk    : std_logic := '0';
     signal clk_en : std_logic := '0';
-    signal reset  : std_logic := '1';
+    signal reset_n : std_logic := '0';
 
     signal tx_bit_data, rx_bit_data, tx_bit_valid, rx_bit_valid, tx_bit_ready, rx_bit_trust : std_logic := '0';
 
@@ -57,7 +57,7 @@ begin
         port map(
             clk          => clk,
             clk_en       => clk_en,
-            reset        => reset,
+            reset_n      => reset_n,
             tx_bit_data  => tx_bit_data,
             tx_bit_valid => tx_bit_valid,
             tx_bit_ready => tx_bit_ready,
@@ -81,7 +81,7 @@ begin
     begin
         wait until rising_edge(clk);
         -- discard waiting bits in scoreboard
-        if reset = '1' then
+        if reset_n = '0' then
             v_pending := false;
             if not sb.is_empty(VOID) then
                 sb.flush("bits in flight are discarded by reset");
@@ -112,7 +112,7 @@ begin
     begin
         wait until rising_edge(clk);
         -- check reset behaviour
-        if reset = '1' then
+        if reset_n = '0' then
             v_first_bit := true;
             wait for C_MARGIN; -- avoids immediate failure at start of simulation
             check_value(rx_bit_data, '0', "bit_data not low after reset");
@@ -177,7 +177,7 @@ begin
         s_en_pattern <= "1111";
 
         log(ID_LOG_HDR, "Reset, then recover");
-        apply_reset(clk, reset);
+        apply_reset(clk, reset_n, C_RESET_LATENCY);
         check_value(rx_bit_data, '0', ERROR, "bit_data low after reset");
         check_value(rx_bit_valid, '0', ERROR, "bit_valid low after reset");
         check_value(tx_bit_ready, '1', ERROR, "bit_ready high after reset");
@@ -209,7 +209,7 @@ begin
             if i > 0 then
                 step(clk, i);
             end if;
-            apply_reset(clk, reset);
+            apply_reset(clk, reset_n, C_RESET_LATENCY);
             check_value(rx_bit_valid, '0', ERROR, "valid low after reset, i=" & to_string(i));
             check_value(rx_bit_data, '0', ERROR, "sample default after reset, i=" & to_string(i));
             check_value(tx_bit_ready, '1', ERROR, "ready high after reset, i=" & to_string(i));

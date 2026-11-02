@@ -454,7 +454,7 @@ class BpskTestbench:
 
     async def start(self) -> None:
         """Start the clock, reset the DUT, then start monitors (and channel)."""
-        self.dut.reset.value = 1
+        self.dut.reset_n.value = 0
         Clock(self.dut.clk, CLK_PERIOD_NS, unit="ns").start()
         await self.reset()
         self.in_mon.start()
@@ -463,14 +463,15 @@ class BpskTestbench:
             self.channel.start()
 
     async def reset(self, cycles: int = 2) -> None:
-        """Hold reset for `cycles` edges and release it; bits in flight are abandoned."""
+        """Hold reset_n low for `cycles` edges and release it; bits in flight are abandoned. Returns once the
+        reset synchroniser in the DUT has released tx and rx (GC_RESET_STAGES more edges)."""
         self.driver.release()
-        self.dut.reset.value = 1
+        self.dut.reset_n.value = 0
         await ClockCycles(self.dut.clk, cycles)
         self.scoreboard.flush()
         self.model.reset()
-        self.dut.reset.value = 0
-        await RisingEdge(self.dut.clk)
+        self.dut.reset_n.value = 1
+        await ClockCycles(self.dut.clk, 1 + self.generics.reset_stages)
 
     async def run(self, sequence: BitSequence) -> None:
         """Send `sequence`; returns once its last bit is accepted (and its idle gap is over)."""

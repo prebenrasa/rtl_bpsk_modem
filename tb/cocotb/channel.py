@@ -75,7 +75,7 @@ class AwgnChannel:
         dut = self.dut
         while True:
             await RisingEdge(dut.clk)
-            if dut.reset.value == 1 or dut.tx_sample_valid.value != 1:
+            if dut.reset_n.value == 0 or dut.tx_sample_valid.value != 1:
                 self._drive(0, 0)
             else:
                 self.n_samples += 1
@@ -121,7 +121,7 @@ class PhaseOffsetChannel(AwgnChannel):
         dut = self.dut
         while True:
             await RisingEdge(dut.clk)
-            if dut.reset.value == 1:
+            if dut.reset_n.value == 0:
                 self._bits.clear()
                 self._symbol = 0
                 self._m = 0

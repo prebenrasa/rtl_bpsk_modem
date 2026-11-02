@@ -51,6 +51,7 @@ package bpsk_tb_pkg is
 
     constant C_TX_LATENCY : natural := 3; -- tx: clocks from the edge that accepts a bit to its first valid sample
     constant C_RX_LATENCY : natural := 4; -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
+    constant C_RESET_LATENCY : natural := 2; -- modem: edges from reset_n released to tx and rx out of reset (reset_sync)
 
     -- modem: clocks from the edge that accepts a bit to rx_bit_valid (clk_en = '1' every clock)
     function f_modem_latency(sps : positive) return natural;
@@ -75,8 +76,9 @@ package bpsk_tb_pkg is
     -- the same delta is not seen yet (drive clk_en from its own process)
     procedure wait_enabled_edges(signal clk : in std_logic; signal clk_en : in std_logic; constant n : in positive);
 
-    -- reset high for one edge, released C_MARGIN after it
-    procedure apply_reset(signal clk : in std_logic; signal reset : out std_logic);
+    -- reset_n low for one edge, released C_MARGIN after it; then release_edges more edges, e.g. C_RESET_LATENCY
+    -- for a top with a reset synchroniser, after which the DUT is out of reset
+    procedure apply_reset(signal clk : in std_logic; signal reset_n : out std_logic; constant release_edges : in natural := 0);
 
     -- carrier model (bit exact with the tx) -----------------------------------
     function f_amplitude(cfg     : t_bpsk_cfg) return integer;                                     -- peak sample value 2**(L-1) - 1
@@ -151,11 +153,14 @@ package body bpsk_tb_pkg is
         end loop;
     end procedure;
 
-    procedure apply_reset(signal clk : in std_logic; signal reset : out std_logic) is
+    procedure apply_reset(signal clk : in std_logic; signal reset_n : out std_logic; constant release_edges : in natural := 0) is
     begin
-        reset <= '1';
+        reset_n <= '0';
         step(clk, 1);
-        reset <= '0';
+        reset_n <= '1';
+        if release_edges > 0 then
+            step(clk, release_edges);
+        end if;
     end procedure;
 
     function f_amplitude(cfg : t_bpsk_cfg) return integer is

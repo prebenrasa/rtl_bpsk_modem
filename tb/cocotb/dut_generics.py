@@ -19,6 +19,7 @@ class DutGenerics:
     ccps: int            # GC_CCPS: carrier cycles per symbol
     sample_width: int    # GC_SAMPLE_WIDTH: sample width in bits (two's complement)
     diff_encoding: bool  # GC_DIFF_ENCODING
+    reset_stages: int    # GC_RESET_STAGES: edges from reset_n released to tx and rx out of reset
 
     @classmethod
     def from_dut(cls, dut) -> "DutGenerics":
@@ -27,6 +28,7 @@ class DutGenerics:
             ccps=int(dut.GC_CCPS.value),
             sample_width=int(dut.GC_SAMPLE_WIDTH.value),
             diff_encoding=bool(int(dut.GC_DIFF_ENCODING.value)),  # GHDL shows a boolean generic as a 1-bit value
+            reset_stages=int(dut.GC_RESET_STAGES.value),
         )
 
     @property
