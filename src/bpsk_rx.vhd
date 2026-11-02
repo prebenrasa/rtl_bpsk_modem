@@ -39,7 +39,8 @@
 --   No clock enable: the input is paced by sample_valid.
 --
 -- Reset
---   async. active high.
+--   async assertion, active low (reset_n = '0'). Deassertion must be
+--   synchronous to clk, e.g. from reset_sync (bpsk_modem does this).
 --   state after reset: bpsk_rx is idle and waiting for samples.
 --                      A symbol being received is abandoned.
 --                      GC_DIFF_ENCODING: the decoder's previous symbol is
@@ -102,7 +103,7 @@ entity bpsk_rx is
     );
     port (
         clk          : in std_logic;
-        reset        : in std_logic;
+        reset_n      : in std_logic; -- async assertion, active low, synchronous deassertion
         sample_data  : in signed(GC_SAMPLE_WIDTH - 1 downto 0);
         sample_valid : in std_logic;
         bit_data     : out std_logic;
@@ -187,9 +188,9 @@ begin
         '0';
 
     -- control: sample counter.
-    p_ctrl : process (clk, reset)
+    p_ctrl : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_count <= 0;
         elsif rising_edge(clk) then
             if sample_valid = '1' then -- current sample is being processed.
@@ -211,7 +212,7 @@ begin
         port map(
             clk        => clk,
             clk_en     => sample_valid, -- carrier advances only while receiving; its phase is steered by the Costas loop via s_step_size
-            reset      => reset,
+            reset_n    => reset_n,
             step_size  => s_step_size,
             sine_valid => s_sine_valid,
             sine_data  => s_sine_data,
@@ -251,9 +252,9 @@ begin
     -- moving sum over the last GC_SPS products (ring buffer: add the new product, subtract the one
     -- GC_SPS samples old; nothing is subtracted until the buffer is full after reset).
     -- At the last sample of a symbol it is that symbol's correlation.
-    p_i_decision_data : process (clk, reset)
+    p_i_decision_data : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_sine_accumulator <= (others => '0');
             s_prod_i           <= 0;
             s_acc_valid        <= '0';
@@ -277,9 +278,9 @@ begin
         end if;
     end process;
 
-    p_q_decision_data : process (clk, reset)
+    p_q_decision_data : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_cos_accumulator <= (others => '0');
         elsif rising_edge(clk) then
             if s_sine_valid_m = '1' then
@@ -292,10 +293,10 @@ begin
         end if;
     end process;
 
-    p_costas_loop : process (clk, reset)
+    p_costas_loop : process (clk, reset_n)
         variable v_i_term : signed(C_FREQ_WIDTH - 1 downto 0); -- integral increment, C_FRAC_WIDTH fraction bits
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_error       <= (others => '0');
             s_freq        <= (others => '0');
             s_p_term      <= (others => '0');
@@ -333,11 +334,11 @@ begin
 
     -- output: use correlator to decide bit value --> sum of sample x local carrier over one symbol
     -- decision rule: corr > 0 --> '1', corr < 0 --> '0', tie (corr = 0) gives '1';
-    p_output : process (clk, reset)
+    p_output : process (clk, reset_n)
         variable v_symbol : std_logic := '0';
         variable v_trust  : std_logic := '0';
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_symbol_prev    <= C_DIFF_REFERENCE;
             s_bit_data       <= '0';
             s_bit_valid      <= '0';

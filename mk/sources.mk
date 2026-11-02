@@ -11,6 +11,7 @@ include $(ROOT)/ip/rtl_nco/sources.mk
 
 RTL_SRC := $(RTL_NCO_SRC) \
            $(ROOT)/src/bpsk_pkg.vhd \
+           $(ROOT)/src/reset_sync.vhd \
            $(ROOT)/src/bpsk_tx.vhd \
            $(ROOT)/src/bpsk_rx.vhd \
            $(ROOT)/src/bpsk_modem.vhd

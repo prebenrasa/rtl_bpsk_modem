@@ -17,12 +17,13 @@ entity bpsk_channel_harness is
         GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
         GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
         GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8;                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
-        GC_DIFF_ENCODING  : boolean  := false -- differential encoding in bpsk_tx, decoding in bpsk_rx
+        GC_DIFF_ENCODING  : boolean  := false; -- differential encoding in bpsk_tx, decoding in bpsk_rx
+        GC_RESET_STAGES   : positive := 2      -- reset synchroniser length: reset release latency in clocks
     );
     port (
         clk             : in std_logic;                             -- system clock
         clk_en          : in std_logic;                             -- one tx sample per clk_en = '1'
-        reset           : in std_logic;                             -- async, active high
+        reset_n         : in std_logic;                             -- async, active low; release synchronised inside
         tx_bit_data     : in std_logic;                             -- bit to send, held until accepted
         tx_bit_valid    : in std_logic;                             -- tx_bit_data holds a bit to send
         tx_bit_ready    : out std_logic;                            -- a bit is accepted at the next edge if tx_bit_valid = '1'
@@ -37,7 +38,19 @@ entity bpsk_channel_harness is
 end entity bpsk_channel_harness;
 
 architecture rtl of bpsk_channel_harness is
+    signal s_reset_n : std_logic; -- reset_n with synchronous deassertion, for tx and rx
 begin
+    -- one synchroniser for tx and rx: both leave reset on the same clock edge, which the rx symbol timing relies on
+    i_reset_sync : entity work.reset_sync
+        generic map(
+            GC_STAGES => GC_RESET_STAGES
+        )
+        port map(
+            clk       => clk,
+            rst_n_in  => reset_n,
+            rst_n_out => s_reset_n
+        );
+
     i_tx : entity work.bpsk_tx
         generic map(
             GC_SAMPLE_WIDTH => GC_SAMPLE_WIDTH,
@@ -50,7 +63,7 @@ begin
         port map(
             clk          => clk,
             clk_en       => clk_en,
-            reset        => reset,
+            reset_n      => s_reset_n,
             bit_data     => tx_bit_data,
             bit_valid    => tx_bit_valid,
             bit_ready    => tx_bit_ready,
@@ -73,7 +86,7 @@ begin
         )
         port map(
             clk          => clk,
-            reset        => reset,
+            reset_n      => s_reset_n,
             sample_data  => rx_sample_data,
             sample_valid => rx_sample_valid,
             bit_data     => rx_bit_data,

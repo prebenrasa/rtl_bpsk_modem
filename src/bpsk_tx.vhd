@@ -29,7 +29,8 @@
 --              - from the next clock, sample_valid = '0' and sample_data = 0
 --
 -- Reset
---   async. active high.
+--   async assertion, active low (reset_n = '0'). Deassertion must be
+--   synchronous to clk, e.g. from reset_sync (bpsk_modem does this).
 --   state after reset: bpsk_tx is idle and waiting for bit input . 
 --                      A symbol being sent is abandoned; its remaining samples are not
 --                      output.
@@ -86,7 +87,7 @@ entity bpsk_tx is
     port (
         clk          : in std_logic;                             -- system clock
         clk_en       : in std_logic;                             -- one sample per clk_en = '1'
-        reset        : in std_logic;                             -- async, active high
+        reset_n      : in std_logic; -- async assertion, active low, synchronous deassertion
         bit_data     : in std_logic;                             -- bit to send, held until accepted
         bit_valid    : in std_logic;                             -- bit_data holds a bit to send
         bit_ready    : out std_logic;                            -- a bit is accepted at the next edge if bit_valid = '1'
@@ -135,9 +136,9 @@ begin
     s_tick   <= clk_en and s_busy;
 
     -- control: symbol state and sample counter.
-    p_ctrl : process (clk, reset)
+    p_ctrl : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_count <= 0;
             s_busy  <= '0';
         elsif rising_edge(clk) then
@@ -156,9 +157,9 @@ begin
     end process;
 
     -- datapath: the bit being transmitted.
-    p_bit_data : process (clk, reset)
+    p_bit_data : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_bit_data <= C_DIFF_REFERENCE;
         elsif rising_edge(clk) then
             if s_accept = '1' then
@@ -180,7 +181,7 @@ begin
         port map(
             clk        => clk,
             clk_en     => s_tick, -- carrier advances only while sending: phase 0 at each symbol start
-            reset      => reset,
+            reset_n    => reset_n,
             step_size  => C_STEP_SIZE,
             sine_valid => s_sine_valid,
             sine_data  => s_sine_data
@@ -195,9 +196,9 @@ begin
     end process;
 
     -- output: 1 = +sine, 0 = -sine, zero when idle. 
-    p_output : process (clk, reset)
+    p_output : process (clk, reset_n)
     begin
-        if reset = '1' then
+        if reset_n = '0' then
             s_sample_data  <= C_SAMPLE_DEFAULT;
             s_sample_valid <= '0';
         elsif rising_edge(clk) then

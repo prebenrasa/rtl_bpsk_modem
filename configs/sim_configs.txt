@@ -24,3 +24,8 @@ GC_SPS=12,GC_CCPS=3,GC_DIFF_ENCODING=true
 # not for the channel harness: its phase tests fail at N=8/M=4 (LUT limit cycle, as without encoding)
 [bpsk_tx_tb bpsk_rx_tb bpsk_modem_tb cocotb_bpsk_modem]
 GC_SPS=8,GC_CCPS=2,GC_PHASE_WIDTH=8,GC_ADDR_WIDTH=4,GC_DIFF_ENCODING=true
+
+[reset_sync_tb]
+default
+GC_STAGES=3
+
