@@ -18,6 +18,10 @@
 --   GC_CORR_THRESHOLD: trust threshold for a decision. bit_trust = '1' when
 --                     |correlation| >= GC_CORR_THRESHOLD, where correlation is
 --                     the sum of sample * carrier over one symbol.
+--   GC_KP, GC_KI     : Costas loop gains of bpsk_rx as shifts (2**-GC_KP,
+--                     2**-GC_KI). Defaults as in bpsk_rx.
+--   GC_FREQ_LIMIT    : pull-in range of the bpsk_rx frequency correction, in
+--                     NCO step LSBs. Default as in bpsk_rx.
 --
 -- Clock and enable
 --   clk    : single clock domain. rising edge.
@@ -45,8 +49,9 @@
 --   Rate    : one bit per GC_SPS clk_en pulses. Back-to-back bits have no gap.
 --
 -- Notes
---   - Ideal channel: tx and rx share clock, carrier phase and symbol timing, so
---     no carrier or symbol synchronisation is needed.
+--   - tx and rx share clock and symbol timing (reset together), so no symbol
+--     synchronisation is needed. The carrier phase is recovered by the Costas
+--     loop in bpsk_rx, which locks at 0 or 180 degrees (inverted bits).
 --------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -54,6 +59,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 
 use work.bpsk_pkg.all;
+use work.nco_pkg.all;
 
 entity bpsk_modem is
     generic (
@@ -62,7 +68,10 @@ entity bpsk_modem is
         GC_CCPS           : positive := f_default_ccps(GC_SPS);                   -- Carrier Cycles per Symbol (CCPS) 
         GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                    -- N accumulator width
         GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                     -- M LUT address = top M bits of the phase
-        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH) -- threshold for classifying decision as trustworthy
+        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH); -- threshold for classifying decision as trustworthy
+        GC_KP             : integer  := 2 * GC_SAMPLE_WIDTH + 2 * integer(ceil(log2(real(GC_SPS)))) - GC_PHASE_WIDTH + 1; -- loop proportional gain 2**-GC_KP
+        GC_KI             : integer  := GC_KP + 4;                                                                        -- loop integral gain 2**-GC_KI
+        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
     );
     port (
         clk          : in std_logic;  -- system clock
@@ -109,7 +118,10 @@ begin
             GC_CCPS           => GC_CCPS,
             GC_PHASE_WIDTH    => GC_PHASE_WIDTH,
             GC_ADDR_WIDTH     => GC_ADDR_WIDTH,
-            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
+            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD,
+            GC_KP             => GC_KP,
+            GC_KI             => GC_KI,
+            GC_FREQ_LIMIT     => GC_FREQ_LIMIT
         )
         port map(
             clk          => clk,
