@@ -32,7 +32,7 @@ architecture bhv of bpsk_rx_tb is
     signal sample_data                                  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- tb helpers
-    shared variable sb   : work.bpsk_bit_sb_pkg.t_generic_sb;           -- scoreboard
+    shared variable sb   : work.bpsk_bit_sb_pkg.t_generic_sb;          -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT; -- watchdog
 
     -- per-sample number of idle edges before the sample, cycled over the symbol
@@ -119,6 +119,9 @@ begin
     end process;
 
     p_stimulus : process
+        -- loop integrator of the rx
+        alias s_freq is << signal .bpsk_rx_tb.i_dut.s_freq : signed >> ;
+        variable v_freq_ref                                : signed(s_freq'range);
         procedure send_sample(constant value : integer; gap_cycles : natural := 0) is
         begin
             for g in 1 to gap_cycles loop
@@ -149,6 +152,17 @@ begin
             check_value(n_samples < GC_SPS, TB_FAILURE, "send_partial_symbol: n_samples must be < GC_SPS");
             for i in 0 to n_samples - 1 loop
                 send_sample(f_tx_sample(C_CFG, bit_value, i));
+            end loop;
+            release_input;
+        end procedure;
+
+        -- carrier phase shifted by one sample (360 * GC_CCPS / GC_SPS degrees): the products then have a
+        -- Q component
+        procedure send_shifted_partial_symbol(constant bit_value : std_logic; constant n_samples : natural) is
+        begin
+            check_value(n_samples < GC_SPS, TB_FAILURE, "send_shifted_partial_symbol: n_samples must be < GC_SPS");
+            for i in 0 to n_samples - 1 loop
+                send_sample(f_tx_sample(C_CFG, bit_value, (i + 1) mod GC_SPS));
             end loop;
             release_input;
         end procedure;
@@ -225,6 +239,21 @@ begin
             send_symbol('0');
             drain;
         end loop;
+
+        -- the product buffers of the moving sums have no reset: entries written before a reset must not
+        -- be subtracted afterwards, or I and Q keep a permanent offset and the loop drifts. 
+        log(ID_LOG_HDR, "Loop state after reset does not depend on the buffer contents before it");
+        send_partial_symbol('1', GC_SPS - 1);
+        apply_reset(clk, reset);
+        send_bits("1010");
+        drain;
+        v_freq_ref := s_freq;
+        send_shifted_partial_symbol('1', GC_SPS - 1);
+        apply_reset(clk, reset);
+        send_bits("1010");
+        drain;
+        check_value(s_freq = v_freq_ref, ERROR, "s_freq after reset depends on the buffer contents before it: " &
+        to_string(to_integer(s_freq)) & ", expected " & to_string(to_integer(v_freq_ref)));
 
         log(ID_LOG_HDR, "sample_valid patterns");
         for i in 0 to 2 loop

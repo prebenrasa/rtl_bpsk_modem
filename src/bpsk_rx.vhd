@@ -74,15 +74,15 @@ use work.nco_pkg.all;
 
 entity bpsk_rx is
     generic (
-        GC_SAMPLE_WIDTH   : positive := C_DEFAULT_SAMPLE_WIDTH;                                                           -- Bit width of received samples and NCO L output amplitude width
-        GC_SPS            : positive := C_DEFAULT_SPS;                                                                    -- Samples per Symbol (SPS) 
-        GC_CCPS           : positive := f_default_ccps(GC_SPS);                                                           -- Carrier Cycles per Symbol (CCPS) 
-        GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                                                            -- N accumulator width
-        GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                                                             -- M LUT address = top M bits of the phase
-        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH);                                        -- threshold for classifying decision as trustworthy
-        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
-        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
-        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
+        GC_SAMPLE_WIDTH   : positive := C_DEFAULT_SAMPLE_WIDTH;                                     -- Bit width of received samples and NCO L output amplitude width
+        GC_SPS            : positive := C_DEFAULT_SPS;                                              -- Samples per Symbol (SPS) 
+        GC_CCPS           : positive := f_default_ccps(GC_SPS);                                     -- Carrier Cycles per Symbol (CCPS) 
+        GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                                      -- N accumulator width
+        GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                                       -- M LUT address = top M bits of the phase
+        GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH);                  -- threshold for classifying decision as trustworthy
+        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH);      -- loop proportional gain 2**-GC_KP
+        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                                -- loop integral gain 2**-GC_KI
+        GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8 -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
     );
     port (
         clk          : in std_logic;
@@ -111,7 +111,7 @@ architecture rtl of bpsk_rx is
     signal s_count : integer range 0 to GC_SPS - 1 := 0; -- sample index within current symbol
 
     -- decoded control (combinational)
-    signal s_last  : std_logic; -- this sample tick is the last of the current symbol
+    signal s_last : std_logic; -- this sample tick is the last of the current symbol
 
     -- datapath and delay alignment with NCO
     type signed_array_t is array (natural range <>) of signed;
@@ -132,6 +132,7 @@ architecture rtl of bpsk_rx is
     signal s_cos_prod_dly  : signed_array_t(GC_SPS - 1 downto 0)(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
     signal s_prod_i        : integer range 0 to GC_SPS - 1                                         := 0;
     signal s_acc_valid     : std_logic                                                             := '0'; -- high when the moving sums hold a new sample
+    signal s_window_full   : std_logic                                                             := '0'; -- high once all GC_SPS buffer entries were written since reset
 
     -- bit decision
     signal s_sine_product     : signed(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
@@ -209,27 +210,46 @@ begin
     p_align_ctrl : process (clk)
     begin
         if rising_edge(clk) then
-            s_last_dly  <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
+            s_last_dly <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
         end if;
     end process;
 
-    -- stage 1: multiply. stage 2: moving sum over the last GC_SPS products (ring buffer: add the new
-    -- product, subtract the one GC_SPS samples old). At the last sample of a symbol it is that symbol's correlation.
+    -- multiply, and the product buffers of the moving sums. No reset on purpose: a reset blocks mapping
+    -- the buffers to LUTRAM. Instead, s_window_full keeps stale entries out of the sums after a reset.
+    p_decision_storage : process (clk)
+    begin
+        if rising_edge(clk) then
+            s_sine_product <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
+            s_cos_product  <= s_sample_data_dly(s_sample_data_dly'high) * s_cos_data;
+            if s_sine_valid_m = '1' then
+                s_sine_prod_dly(s_prod_i) <= s_sine_product;
+                s_cos_prod_dly(s_prod_i)  <= s_cos_product;
+            end if;
+        end if;
+    end process;
+
+    -- moving sum over the last GC_SPS products (ring buffer: add the new product, subtract the one
+    -- GC_SPS samples old; nothing is subtracted until the buffer is full after reset).
+    -- At the last sample of a symbol it is that symbol's correlation.
     p_i_decision_data : process (clk, reset)
     begin
         if reset = '1' then
-            s_sine_prod_dly    <= (others => (others => '0'));
             s_sine_accumulator <= (others => '0');
             s_prod_i           <= 0;
-            s_acc_valid           <= '0';
+            s_acc_valid        <= '0';
+            s_window_full      <= '0';
         elsif rising_edge(clk) then
-            s_sine_product            <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
             s_acc_valid <= s_sine_valid_m;
             if s_sine_valid_m = '1' then
-                s_sine_prod_dly(s_prod_i) <= s_sine_product;
-                s_sine_accumulator        <= s_sine_accumulator + s_sine_product - s_sine_prod_dly(s_prod_i);
+                if s_window_full = '1' then
+                    s_sine_accumulator <= s_sine_accumulator + s_sine_product - s_sine_prod_dly(s_prod_i);
+                else
+                    s_sine_accumulator <= s_sine_accumulator + s_sine_product;
+                end if;
+
                 if s_prod_i = GC_SPS - 1 then -- explicit wrap: no mod logic when GC_SPS is not a power of two
-                    s_prod_i <= 0;
+                    s_prod_i      <= 0;
+                    s_window_full <= '1';
                 else
                     s_prod_i <= s_prod_i + 1;
                 end if;
@@ -240,13 +260,14 @@ begin
     p_q_decision_data : process (clk, reset)
     begin
         if reset = '1' then
-            s_cos_prod_dly    <= (others => (others => '0'));
             s_cos_accumulator <= (others => '0');
         elsif rising_edge(clk) then
-            s_cos_product            <= s_sample_data_dly(s_sample_data_dly'high) * s_cos_data;
             if s_sine_valid_m = '1' then
-                s_cos_prod_dly(s_prod_i) <= s_cos_product;
-                s_cos_accumulator        <= s_cos_accumulator + s_cos_product - s_cos_prod_dly(s_prod_i);
+                if s_window_full = '1' then
+                    s_cos_accumulator <= s_cos_accumulator + s_cos_product - s_cos_prod_dly(s_prod_i);
+                else
+                    s_cos_accumulator <= s_cos_accumulator + s_cos_product;
+                end if;
             end if;
         end if;
     end process;
