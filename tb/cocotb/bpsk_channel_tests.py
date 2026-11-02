@@ -94,10 +94,6 @@ async def test_phase_offset(dut, phase_deg, freq_offset):
     await tb.run(BitSequence.random(n_bits))
     await tb.finish()
 
-    phase_mon.write_csv(
-        f"costas_phase{phase_deg:g}_drift{freq_offset:g}.csv",  # in the run directory build/cocotb/<toplevel>/<config>/
-        sps=tb.generics.sps, phase_deg=phase_deg, freq_offset=freq_offset,
-    )
     errors = phase_mon.errors_deg
     trace = ", ".join(f"{e:.1f}" for e in errors[:: max(1, len(errors) // 15)])
     dut._log.info(f"phase {phase_deg} deg, drift {freq_offset} cycles/sample: error trace [{trace}] deg")

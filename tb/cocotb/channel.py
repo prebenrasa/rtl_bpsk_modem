@@ -107,7 +107,7 @@ class PhaseOffsetChannel(AwgnChannel):
         self.diff_encoding = self.generics.diff_encoding
         self._symbol = 0  # last symbol queued: encoder state, the reference after reset
         self._bits: list[int] = []  # symbols of accepted bits, not yet sent
-        self.symbols: list[int] = []  # every symbol queued since start, in order (line symbols, for data-aided plots)
+        self.symbols: list[int] = []  # every symbol queued since start, in order (line symbols)
         self._bit = 0
         self._m = 0
 
@@ -178,12 +178,3 @@ class PhaseErrorMonitor:
             self.errors_deg.append((error + 90.0) % 180.0 - 90.0)
             self.iq.append((i, q))
             self.freqs.append(rx.s_freq.value.to_signed())
-
-    def write_csv(self, path, sps: int, phase_deg: float, freq_offset: float) -> None:
-        """One row per symbol, for plot_costas.py: channel phase, residual error and
-        frequency correction (cycles/sample), next to the true offset."""
-        with open(path, "w") as f:
-            f.write("symbol,channel_deg,error_deg,freq_correction,freq_offset\n")
-            for k, (error, freq) in enumerate(zip(self.errors_deg, self.freqs)):
-                channel_deg = phase_deg + 360.0 * freq_offset * (k + 0.5) * sps  # mid-symbol
-                f.write(f"{k},{channel_deg},{error},{freq / 2**self.freq_width},{freq_offset}\n")
