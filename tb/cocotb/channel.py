@@ -129,15 +129,18 @@ class PhaseOffsetChannel(AwgnChannel):
 class PhaseErrorMonitor:
     """Logs the residual carrier phase error of bpsk_rx once per symbol.
 
-    When i_rx.s_decision_done rises, the two correlators hold the
-    sums of one symbol: I = sum r*sin, Q = sum r*cos, and atan2(Q, I) = phi - theta.
+    When i_rx.s_decision_done rises, the moving sums hold the products of exactly one
+    symbol: I = sum r*sin, Q = sum r*cos, and atan2(Q, I) = phi - theta. They (and s_freq)
+    change with every valid sample, so they are read right at that edge.
     Wrapped to (-90, 90] degrees: the data bit and the BPSK 180 degree ambiguity drop out.
     """
 
     def __init__(self, dut):
         self.dut = dut
         self.errors_deg: list[float] = []
-        self.freqs: list[int] = []  # i_rx.s_freq per symbol (integral path, step LSBs)
+        self.freqs: list[int] = []  # i_rx.s_freq per symbol (integral path, in 2**-C_FRAC_WIDTH step LSBs)
+        # s_freq is GC_PHASE_WIDTH + C_FRAC_WIDTH bits: one cycle/sample is 2**freq_width
+        self.freq_width = len(dut.i_rx.s_freq)
         self._task = None
 
     def start(self) -> None:
@@ -152,8 +155,8 @@ class PhaseErrorMonitor:
     async def _run(self) -> None:
         rx = self.dut.i_rx
         while True:
-            # wakes once per symbol, not every clock: s_decision_done is a one-clock pulse, and the
-            # correlators and s_freq hold their values until the edge after it
+            # wakes once per symbol, not every clock: s_decision_done is a one-clock pulse. The moving sums
+            # and s_freq change every sample, but read right after this edge the sums are exactly one symbol
             await RisingEdge(rx.s_decision_done)
             i = rx.s_sine_accumulator.value.to_signed()
             q = rx.s_cos_accumulator.value.to_signed()
@@ -161,11 +164,11 @@ class PhaseErrorMonitor:
             self.errors_deg.append((error + 90.0) % 180.0 - 90.0)
             self.freqs.append(rx.s_freq.value.to_signed())
 
-    def write_csv(self, path, sps: int, phase_width: int, phase_deg: float, freq_offset: float) -> None:
+    def write_csv(self, path, sps: int, phase_deg: float, freq_offset: float) -> None:
         """One row per symbol, for plot_costas.py: channel phase, residual error and
         frequency correction (cycles/sample), next to the true offset."""
         with open(path, "w") as f:
             f.write("symbol,channel_deg,error_deg,freq_correction,freq_offset\n")
             for k, (error, freq) in enumerate(zip(self.errors_deg, self.freqs)):
                 channel_deg = phase_deg + 360.0 * freq_offset * (k + 0.5) * sps  # mid-symbol
-                f.write(f"{k},{channel_deg},{error},{freq / 2**phase_width},{freq_offset}\n")
+                f.write(f"{k},{channel_deg},{error},{freq / 2**self.freq_width},{freq_offset}\n")
