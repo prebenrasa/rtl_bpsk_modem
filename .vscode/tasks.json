@@ -5,13 +5,19 @@
             "id": "tb",
             "type": "promptString",
             "description": "Testbench entity",
-            "default": "top_tb"
+            "default": "bpsk_modem_tb"
         },
         {
             "id": "top",
             "type": "promptString",
             "description": "Top-level entity for synthesis",
-            "default": "top"
+            "default": "bpsk_modem"
+        },
+        {
+            "id": "cocotb_filter",
+            "type": "promptString",
+            "description": "pytest -k expression (test or configuration name)",
+            "default": "GC_SPS-16"
         }
     ],
     "tasks": [
@@ -24,7 +30,7 @@
                 {
                     "owner": "ghdl",
                     "source": "ghdl",
-                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "fileLocation": ["autoDetect", "${workspaceFolder}/build/ghdl"],
                     "severity": "error",
                     "pattern": {
                         "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(?!@)\\s*(?:(error|warning):)?\\s*(.*)$",
@@ -34,7 +40,7 @@
                 {
                     "owner": "ghdl-run",
                     "source": "ghdl sim",
-                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "fileLocation": ["autoDetect", "${workspaceFolder}/build/ghdl"],
                     "severity": "info",
                     "pattern": {
                         "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) note\\):\\s*(.*)$",
@@ -44,7 +50,7 @@
                 {
                     "owner": "ghdl-run",
                     "source": "ghdl sim",
-                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "fileLocation": ["autoDetect", "${workspaceFolder}/build/ghdl"],
                     "severity": "warning",
                     "pattern": {
                         "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) warning\\):\\s*(.*)$",
@@ -54,7 +60,7 @@
                 {
                     "owner": "ghdl-run",
                     "source": "ghdl sim",
-                    "fileLocation": ["relative", "${workspaceFolder}/sim"],
+                    "fileLocation": ["autoDetect", "${workspaceFolder}/build/ghdl"],
                     "severity": "error",
                     "pattern": {
                         "regexp": "^(.*\\.vhdl?):(\\d+):(\\d+):(@\\S+?):\\((?:report|assertion) (?:error|failure)\\):\\s*(.*)$",
@@ -68,6 +74,27 @@
             "type": "shell",
             "command": "make sim-all",
             "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "cocotb: run all tests",
+            "type": "shell",
+            "command": "make cocotb",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "cocotb: run tests matching a filter",
+            "type": "shell",
+            "command": "make cocotb PYTEST_ARGS=\"-k ${input:cocotb_filter}\"",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "All tests (GHDL + cocotb)",
+            "type": "shell",
+            "command": "make test",
+            "group": { "kind": "test", "isDefault": true },
             "problemMatcher": []
         },
         {
@@ -86,7 +113,7 @@
         {
             "label": "Vivado: implementation",
             "type": "shell",
-            "command": "make impl",
+            "command": "make impl TOP=${input:top}",
             "group": "build",
             "problemMatcher": []
         },
@@ -100,7 +127,7 @@
         {
             "label": "Vivado: bitstream (optional)",
             "type": "shell",
-            "command": "make bit",
+            "command": "make bit TOP=${input:top}",
             "problemMatcher": []
         },
         {
@@ -112,13 +139,13 @@
         {
             "label": "Vivado GUI: open synthesised design",
             "type": "shell",
-            "command": "make open-synth",
+            "command": "make open-synth TOP=${input:top}",
             "problemMatcher": []
         },
         {
             "label": "Vivado GUI: open implemented design",
             "type": "shell",
-            "command": "make open-impl",
+            "command": "make open-impl TOP=${input:top}",
             "problemMatcher": []
         },
         {

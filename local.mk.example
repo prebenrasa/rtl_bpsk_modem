@@ -1,0 +1,15 @@
+# Machine-specific settings for the Makefile. Copy to local.mk (ignored by git) and edit.
+# Every line is optional: leave out what the Makefile defaults already get right.
+# Comments stay on their own lines (text after a value adds trailing spaces to it).
+
+# Vivado executable; the default is "vivado" on PATH
+# VIVADO := /opt/Xilinx/2026.1/Vivado/bin/vivado
+
+# UVVM checkout and its compiled GHDL libraries (defaults under $(HOME)/design/libs/)
+# UVVM_DIR := $(HOME)/design/libs/UVVM
+# UVVM_LIB := $(HOME)/design/libs/uvvm_compiled/ghdl
+
+# Other tools, if not on PATH
+# GHDL       := ghdl
+# WAVEVIEWER := gtkwave
+# UV         := uv

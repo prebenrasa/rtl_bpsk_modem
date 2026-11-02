@@ -7,7 +7,6 @@
         "**/.Xil": true
     },
     "search.exclude": {
-        "sim/**": true,
         "build/**": true
     },
     "[vhdl]": {

@@ -3,12 +3,14 @@ standard = "2008"
 
 # "work" is reserved in vhdl_ls; "work." in the code still refers to this library.
 [libraries]
-defaultlib.files = ["src/*.vhd", "tb/*.vhd", "ip/rtl_nco/src/*.vhd", "ip/rtl_nco/tb/*.vhd"]
+# vhdl_ls cannot read mk/sources.mk: keep these folders in step with the lists there
+defaultlib.files = ["src/*.vhd", "tb/uvvm/*.vhd", "ip/rtl_nco/src/*.vhd", "ip/rtl_nco/tb/*.vhd"]
 
-# UVVM Utility Library (read-only, no diagnostics); keep the path in step with UVVM_DIR in the Makefile
-uvvm_util.files = ["/home/preben/design/libs/UVVM/uvvm_util/src/*.vhd"]
+# UVVM Utility Library (read-only, no diagnostics); keep the path in step with UVVM_DIR in the Makefile / local.mk
+# vhdl_ls expands environment variables ($HOME, ${NAME}) in paths, so this file works for any user
+uvvm_util.files = ["$HOME/design/libs/UVVM/uvvm_util/src/*.vhd"]
 uvvm_util.is_third_party = true
 
-# UVVM Scoreboard (used by tb/nco_tb.vhd); same UVVM checkout as above
-bitvis_vip_scoreboard.files = ["/home/preben/design/libs/UVVM/bitvis_vip_scoreboard/src/*.vhd"]
+# UVVM Scoreboard (used by the testbenches in tb/uvvm/ and ip/rtl_nco/tb/); same UVVM checkout as above
+bitvis_vip_scoreboard.files = ["$HOME/design/libs/UVVM/bitvis_vip_scoreboard/src/*.vhd"]
 bitvis_vip_scoreboard.is_third_party = true
