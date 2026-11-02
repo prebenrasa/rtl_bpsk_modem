@@ -8,7 +8,7 @@ import math
 import cocotb
 
 from bpsk_tests import BitSequence, BpskTestbench
-from channel import AwgnChannel
+from channel import AwgnChannel, PhaseErrorMonitor, PhaseOffsetChannel
 
 
 def ber_theory(ebn0_db: float) -> float:
@@ -45,3 +45,36 @@ async def test_channel_awgn(dut, ebn0_db):
     assert channel.clip_rate < 1e-3, f"clip rate {channel.clip_rate:.2g}: noise does not fit the sample range"
     # loose demo bound (not a statistical test): within a factor 2 of theory
     assert expected / 2 <= sb.ber <= expected * 2, f"BER {sb.ber:.4f} not within 2x of theory {expected:.4f}"
+
+
+@cocotb.test(timeout_time=100, timeout_unit="ms")
+@cocotb.parametrize(phase_deg=[30.0, -60.0], freq_offset=[0.0, 1e-4])
+async def test_phase_offset(dut, phase_deg, freq_offset):
+    """Carrier phase offset (and drift): the Costas loop pulls the phase error to ~0.
+
+    A wrong feedback sign drives the error to +-90 degrees instead (I collapses, bits turn random).
+    Bits are counted, not checked, while the loop acquires; the phase error over the last
+    symbols must be small.
+    """
+    n_bits, n_settled = 300, 50
+    channel = PhaseOffsetChannel(dut, phase_deg=phase_deg, freq_offset=freq_offset)
+    tb = BpskTestbench(dut, channel=channel, strict=False, expected_trust=None)
+    tb.in_mon.subscribe(channel.on_bit)
+    phase_mon = PhaseErrorMonitor(dut)
+    await tb.start()
+    phase_mon.start()
+    await tb.run(BitSequence.random(n_bits))
+    await tb.finish()
+
+    phase_mon.write_csv(
+        f"costas_phase{phase_deg:g}_drift{freq_offset:g}.csv",  # in the run directory build/cocotb/<toplevel>/<config>/
+        sps=tb.sps, phase_width=int(dut.GC_PHASE_WIDTH.value), phase_deg=phase_deg, freq_offset=freq_offset,
+    )
+    errors = phase_mon.errors_deg
+    trace = ", ".join(f"{e:.1f}" for e in errors[:: max(1, len(errors) // 15)])
+    dut._log.info(f"phase {phase_deg} deg, drift {freq_offset} cycles/sample: error trace [{trace}] deg")
+    settled = errors[-n_settled:]
+    worst = max(abs(e) for e in settled)
+    dut._log.info(f"last {n_settled} symbols: worst |error| {worst:.2f} deg; {tb.scoreboard.summary()}")
+    assert len(errors) >= n_bits, f"only {len(errors)} symbols seen"
+    assert worst < 5.0, f"phase error not settled: worst |error| {worst:.1f} deg over the last {n_settled} symbols"
