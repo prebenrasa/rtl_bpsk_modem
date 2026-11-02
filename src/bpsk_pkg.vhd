@@ -55,8 +55,13 @@ package bpsk_pkg is
 
     function f_scale(e : signed; shift : integer; width : positive) return signed;
 
-    -- x clamped to -limit .. +limit, resized to width; limit must fit in both x and width
-    function f_saturate(x : signed; limit : natural; width : positive) return signed;
+    -- x clamped to -limit .. +limit, resized to width; limit must fit in both x and width.
+    -- x has frac_width fraction bits: limit is in integer units and is shifted left by frac_width
+    function f_saturate(x : signed; limit : natural; width : positive; frac_width : natural := 0) return signed;
+
+    -- a + b, saturated with f_saturate: the sum is computed one bit wider than the wider operand, so it
+    -- cannot wrap before it is clamped. a and b must have the same frac_width.
+    function f_add_sat(a, b : signed; limit : natural; width : positive; frac_width : natural := 0) return signed;
 end package bpsk_pkg;
 
 package body bpsk_pkg is
@@ -104,17 +109,24 @@ package body bpsk_pkg is
         end if;
     end function;
 
-    -- compare at the width of x, so a sum computed with a guard bit is clamped before it is narrowed
-    function f_saturate(x : signed; limit : natural; width : positive) return signed is
-        constant C_LIMIT : signed(x'length - 1 downto 0) := to_signed(limit, x'length);
+    -- compare at the width of x, so a sum computed with a guard bit is clamped before it is narrowed;
+    -- the limit is shifted in signed, so limit * 2**frac_width may exceed integer'high
+    function f_saturate(x : signed; limit : natural; width : positive; frac_width : natural := 0) return signed is
+        constant C_LIMIT : signed(x'length - 1 downto 0)                                        := shift_left(to_signed(limit, x'length), frac_width);
     begin
         if x > C_LIMIT then
             return resize(C_LIMIT, width);
-        elsif x < -C_LIMIT then
+        elsif x <- C_LIMIT then
             return resize(-C_LIMIT, width);
         else
             return resize(x, width);
         end if;
+    end function;
+
+    function f_add_sat(a, b : signed; limit : natural; width : positive; frac_width : natural := 0) return signed is
+        constant C_SUM_WIDTH : positive                                                           := maximum(a'length, b'length) + 1; -- guard bit
+    begin
+        return f_saturate(resize(a, C_SUM_WIDTH) + resize(b, C_SUM_WIDTH), limit, width, frac_width);
     end function;
 
 end package body bpsk_pkg;

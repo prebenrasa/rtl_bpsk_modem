@@ -18,7 +18,8 @@
 --                     |correlation| >= GC_CORR_THRESHOLD, where correlation is
 --                     the sum of sample * carrier over one symbol.
 --   GC_KP            : Costas loop proportional gain as a shift: the phase error
---                     enters the NCO step scaled by 2**-GC_KP. Negative values
+--                     enters the NCO step scaled by 2**-GC_KP (in step LSBs,
+--                     kept with C_FRAC_WIDTH fraction bits). Negative values
 --                     shift left. Default: about a quarter of the phase error
 --                     corrected per symbol (2*L + 2*log2(SPS) - N + 1).
 --   GC_KI            : Costas loop integral gain as a shift: the phase error is
@@ -56,6 +57,9 @@
 --   - Carrier phase is recovered by a Costas loop: the error sign(I) * Q of
 --     each symbol adjusts the NCO step. It locks
 --     at 0 or 180 degrees; at 180 degrees every bit is inverted.
+--   - Loop precision: the loop filter keeps C_FRAC_WIDTH = max(GC_KP, GC_KI)
+--     fraction bits below the step LSB. The rx NCO accumulator is GC_PHASE_WIDTH + C_FRAC_WIDTH bits wide
+--     and takes the full-precision step.
 --   - Symbol timing is not recovered: symbol boundaries follow from the sample
 --     counter, so tx and rx must be reset together.
 --------------------------------------------------------------------------------
@@ -94,8 +98,13 @@ architecture rtl of bpsk_rx is
     -- check carrier generics
     constant C_CARRIER_OK : boolean := f_check_carrier(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
 
-    constant C_STEP_SIZE : unsigned(GC_PHASE_WIDTH - 1 downto 0) := f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
-    constant C_ACC_WIDTH : natural                               := 2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS))));
+    constant C_STEP_SIZE  : unsigned(GC_PHASE_WIDTH - 1 downto 0) := f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH);
+    constant C_ACC_WIDTH  : natural                               := 2 * GC_SAMPLE_WIDTH + integer(ceil(log2(real(GC_SPS))));
+    constant C_FRAC_WIDTH : natural                               := maximum(0, maximum(GC_KP, GC_KI));
+    constant C_FREQ_WIDTH : natural                               := GC_PHASE_WIDTH + C_FRAC_WIDTH; -- s_freq and the rx NCO accumulator: N + F bits
+
+    -- nominal step in the NCO's N + F format: C_FRAC_WIDTH fraction bits below the step LSB
+    constant C_STEP_SIZE_Q : unsigned(C_FREQ_WIDTH - 1 downto 0) := shift_left(resize(C_STEP_SIZE, C_FREQ_WIDTH), C_FRAC_WIDTH);
 
     -- control (reset) signals
     signal s_count : integer range 0 to GC_SPS - 1 := 0; -- sample index within current symbol
@@ -111,15 +120,15 @@ architecture rtl of bpsk_rx is
     signal s_first_dly       : std_logic_vector(C_NCO_LATENCY - 1 downto 0) := (others => '0');
 
     -- NCO
-    signal s_step_size  : unsigned(GC_PHASE_WIDTH - 1 downto 0) := C_STEP_SIZE;
+    signal s_step_size  : unsigned(C_FREQ_WIDTH - 1 downto 0) := C_STEP_SIZE_Q;
     signal s_sine_valid : std_logic;
     signal s_sine_data  : signed(GC_SAMPLE_WIDTH - 1 downto 0);
     signal s_cos_data   : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- costas loop
-    signal s_freq        : signed(GC_PHASE_WIDTH - 1 downto 0) := (others => '0');
-    signal s_error       : signed(C_ACC_WIDTH - 1 downto 0)    := (others => '0');
-    signal s_error_valid : std_logic                           := '0';
+    signal s_freq        : signed(C_FREQ_WIDTH - 1 downto 0) := (others => '0');
+    signal s_error       : signed(C_ACC_WIDTH - 1 downto 0)  := (others => '0');
+    signal s_error_valid : std_logic                         := '0';
 
     -- bit decision
     signal s_sine_product     : signed(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
@@ -138,12 +147,17 @@ architecture rtl of bpsk_rx is
 begin
 
     assert GC_FREQ_LIMIT < 2 ** (GC_PHASE_WIDTH - 1)
-        report "GC_FREQ_LIMIT must fit in s_freq (below 2**(GC_PHASE_WIDTH-1))"
+    report "GC_FREQ_LIMIT must fit in s_freq (below 2**(GC_PHASE_WIDTH-1))"
         severity failure;
     -- in unsigned: C_STEP_SIZE + GC_FREQ_LIMIT can exceed integer'high for GC_PHASE_WIDTH = 31
     assert GC_FREQ_LIMIT <= C_STEP_SIZE and
-           resize(C_STEP_SIZE, GC_PHASE_WIDTH + 1) + GC_FREQ_LIMIT < shift_left(to_unsigned(1, GC_PHASE_WIDTH + 1), GC_PHASE_WIDTH)
-        report "GC_FREQ_LIMIT: the NCO step C_STEP_SIZE +- GC_FREQ_LIMIT must stay within 0 .. 2**GC_PHASE_WIDTH - 1"
+    resize(C_STEP_SIZE, GC_PHASE_WIDTH + 1) + GC_FREQ_LIMIT < shift_left(to_unsigned(1, GC_PHASE_WIDTH + 1), GC_PHASE_WIDTH)
+    report "GC_FREQ_LIMIT: the NCO step C_STEP_SIZE +- GC_FREQ_LIMIT must stay within 0 .. 2**GC_PHASE_WIDTH - 1"
+        severity failure;
+    -- f_scale resizes the scaled error without saturating: e * 2**-K has C_ACC_WIDTH - K integer bits,
+    -- which must fit in the GC_PHASE_WIDTH integer bits of the step (and of s_freq above its fraction bits)
+    assert C_ACC_WIDTH - minimum(GC_KP, GC_KI) <= GC_PHASE_WIDTH
+    report "GC_KP / GC_KI too small: the scaled phase error (C_ACC_WIDTH - K bits) overflows GC_PHASE_WIDTH bits"
         severity failure;
 
     s_last <= '1' when (s_count = GC_SPS - 1) else
@@ -169,7 +183,7 @@ begin
 
     i_nco : entity work.nco
         generic map(
-            GC_PHASE_WIDTH  => GC_PHASE_WIDTH,
+            GC_PHASE_WIDTH  => C_FREQ_WIDTH, -- N + F: the accumulator carries the loop's fraction bits into the phase every sample
             GC_ADDR_WIDTH   => GC_ADDR_WIDTH,
             GC_SAMPLE_WIDTH => GC_SAMPLE_WIDTH
         )
@@ -232,13 +246,14 @@ begin
     end process;
 
     p_costas_loop : process (clk, reset)
-        constant C_GUARD_WIDTH : positive := GC_PHASE_WIDTH + 1;   -- sums one bit wider than s_freq cannot wrap before f_saturate
-        variable v_freq        : signed(GC_PHASE_WIDTH - 1 downto 0); -- new s_freq, also used by stage 3 in the same edge
+        variable v_i_term : signed(C_FREQ_WIDTH - 1 downto 0); -- integral increment, C_FRAC_WIDTH fraction bits
+        variable v_freq   : signed(C_FREQ_WIDTH - 1 downto 0); -- new s_freq, also used by stage 3 in the same edge
+        variable v_p_term : signed(C_FREQ_WIDTH - 1 downto 0); -- proportional correction, C_FRAC_WIDTH fraction bits
     begin
         if reset = '1' then
             s_error       <= (others => '0');
             s_freq        <= (others => '0');
-            s_step_size   <= C_STEP_SIZE;
+            s_step_size   <= C_STEP_SIZE_Q;
             s_error_valid <= '0';
         elsif rising_edge(clk) then
             if s_decision_done = '1' then
@@ -252,15 +267,16 @@ begin
 
             s_error_valid <= s_decision_done;
             if s_error_valid = '1' then
-                -- stage 2: accumulate the frequency offset, saturated at +-GC_FREQ_LIMIT (no wrap)
-                v_freq := f_saturate(resize(s_freq, C_GUARD_WIDTH) + resize(f_scale(s_error, GC_KI, GC_PHASE_WIDTH), C_GUARD_WIDTH),
-                                     GC_FREQ_LIMIT, GC_PHASE_WIDTH);
+                -- stage 2: integral path, accumulated with C_FRAC_WIDTH fraction bits, saturated at +-GC_FREQ_LIMIT
+                v_i_term := f_scale(s_error, GC_KI - C_FRAC_WIDTH, C_FREQ_WIDTH);
+                v_freq   := f_add_sat(s_freq, v_i_term, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH);
                 s_freq <= v_freq;
 
-                -- stage 3: update s_step_size of NCO with the new frequency; the total correction is also
-                -- saturated, so the step stays within C_STEP_SIZE +- GC_FREQ_LIMIT and cannot wrap
-                s_step_size <= C_STEP_SIZE + unsigned(f_saturate(resize(f_scale(s_error, GC_KP, GC_PHASE_WIDTH), C_GUARD_WIDTH) + resize(v_freq, C_GUARD_WIDTH),
-                                                                 GC_FREQ_LIMIT, GC_PHASE_WIDTH));
+                -- stage 3: step = nominal + proportional + integral, all with C_FRAC_WIDTH fraction bits;
+                -- No rounding to N bits: the NCO accumulator takes the fraction and carries it into the phase.
+                -- correction is saturated within C_STEP_SIZE +- GC_FREQ_LIMIT
+                v_p_term := f_scale(s_error, GC_KP - C_FRAC_WIDTH, C_FREQ_WIDTH);
+                s_step_size <= C_STEP_SIZE_Q + unsigned(f_add_sat(v_p_term, v_freq, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH));
             end if;
         end if;
     end process;
