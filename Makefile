@@ -64,7 +64,7 @@ VIVADO_SCRIPT = $(abspath scripts)
 VIVADO_SRC_F  = $(abspath $(VIVADO_OUT))/sources.f
 write_sources_f = $(file >$(VIVADO_SRC_F)) $(foreach f,$(RTL_SRC),$(file >>$(VIVADO_SRC_F),$(f)))
 
-.PHONY: help check uvvm-lib sim sim-all cocotb test wave synth impl bit rtl open-synth open-impl reports save-reports clean
+.PHONY: help check uvvm-lib sim sim-all cocotb test figures wave synth impl bit rtl open-synth open-impl reports save-reports clean
 
 help:
 	@echo "Simulation (GHDL, VHDL-2008)"
@@ -72,6 +72,7 @@ help:
 	@echo "  make sim-all                  run every *_tb.vhd in each configuration of configs/sim_configs.txt, print pass/fail"
 	@echo "  make cocotb                   run the cocotb tests (tb/cocotb/) in each configuration, via pytest"
 	@echo "  make test                     sim-all + cocotb"
+	@echo "  make figures                  report simulations (tens of minutes) + figures into doc/figures/"
 	@echo "  make wave  [TB=$(TB)]         open the .ghw in $(WAVEVIEWER)"
 	@echo "Vivado (part $(PART))"
 	@echo "  make synth [TOP=$(TOP)]       synthesis -> $(VIVADO_OUT)/post_synth.dcp + reports"
@@ -147,6 +148,11 @@ cocotb:
 	$(UV) run pytest tb/cocotb $(PYTEST_ARGS)
 
 test: sim-all cocotb
+
+# report figures: the data-logging simulations, then the plots (see tb/cocotb/README.md, Report figures)
+figures:
+	$(UV) run pytest tb/cocotb/report_runner.py
+	$(UV) run --group dev python tb/cocotb/plot_report.py
 
 wave:
 	$(WAVEVIEWER) $(SIM_DIR)/$(TB).ghw &

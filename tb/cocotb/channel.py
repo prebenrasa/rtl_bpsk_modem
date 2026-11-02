@@ -107,6 +107,7 @@ class PhaseOffsetChannel(AwgnChannel):
         self.diff_encoding = self.generics.diff_encoding
         self._symbol = 0  # last symbol queued: encoder state, the reference after reset
         self._bits: list[int] = []  # symbols of accepted bits, not yet sent
+        self.symbols: list[int] = []  # every symbol queued since start, in order (line symbols, for data-aided plots)
         self._bit = 0
         self._m = 0
 
@@ -114,6 +115,7 @@ class PhaseOffsetChannel(AwgnChannel):
         """BitInMonitor callback: queue the symbol of the next accepted bit."""
         self._symbol = txn.bit ^ self._symbol if self.diff_encoding else txn.bit
         self._bits.append(self._symbol)
+        self.symbols.append(self._symbol)
 
     async def _run(self) -> None:
         dut = self.dut
@@ -150,6 +152,7 @@ class PhaseErrorMonitor:
         self.dut = dut
         self.errors_deg: list[float] = []
         self.freqs: list[int] = []  # i_rx.s_freq per symbol (integral path, in 2**-C_FRAC_WIDTH step LSBs)
+        self.iq: list[tuple[int, int]] = []  # (I, Q) per symbol: the correlations the error comes from
         # s_freq is GC_PHASE_WIDTH + C_FRAC_WIDTH bits: one cycle/sample is 2**freq_width
         self.freq_width = len(dut.i_rx.s_freq)
         self._task = None
@@ -173,6 +176,7 @@ class PhaseErrorMonitor:
             q = rx.s_cos_accumulator.value.to_signed()
             error = math.degrees(math.atan2(q, i))
             self.errors_deg.append((error + 90.0) % 180.0 - 90.0)
+            self.iq.append((i, q))
             self.freqs.append(rx.s_freq.value.to_signed())
 
     def write_csv(self, path, sps: int, phase_deg: float, freq_offset: float) -> None:
