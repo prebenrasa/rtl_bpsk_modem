@@ -8,10 +8,11 @@
 
 [bpsk_tx_tb bpsk_rx_tb bpsk_modem_tb cocotb_bpsk_modem cocotb_bpsk_channel_harness]
 default
-GC_SPS=8,GC_CCPS=2,GC_PHASE_WIDTH=8,GC_ADDR_WIDTH=4
+GC_SPS=8,GC_CCPS=2,GC_PHASE_WIDTH=8,GC_ADDR_WIDTH=4 # known limitation: 
 GC_SPS=12,GC_CCPS=3
 GC_SPS=16,GC_CCPS=7
 GC_SPS=64,GC_CCPS=1,GC_SAMPLE_WIDTH=12,GC_ADDR_WIDTH=10
-GC_SPS=128,GC_CCPS=1
+GC_SPS=128,GC_CCPS=31
+GC_SPS=128,GC_CCPS=1     # known limitation: few carrier cycles per symbol
 GC_SPS=32,GC_CCPS=8,GC_PHASE_WIDTH=28
 GC_SPS=32,GC_CCPS=7,GC_SAMPLE_WIDTH=16,GC_ADDR_WIDTH=10
