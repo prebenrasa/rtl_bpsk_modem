@@ -17,7 +17,8 @@ entity bpsk_modem_tb is
         GC_CCPS           : positive := work.bpsk_pkg.f_default_ccps(GC_SPS);
         GC_PHASE_WIDTH    : positive := work.bpsk_pkg.C_DEFAULT_PHASE_WIDTH;
         GC_ADDR_WIDTH     : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH;
-        GC_CORR_THRESHOLD : positive := work.bpsk_pkg.f_default_corr_threshold(GC_SAMPLE_WIDTH)
+        GC_CORR_THRESHOLD : positive := work.bpsk_pkg.f_default_corr_threshold(GC_SAMPLE_WIDTH);
+        GC_DIFF_ENCODING  : boolean  := false
     );
 end entity bpsk_modem_tb;
 
@@ -49,7 +50,8 @@ begin
             GC_CCPS           => GC_CCPS,
             GC_PHASE_WIDTH    => GC_PHASE_WIDTH,
             GC_ADDR_WIDTH     => GC_ADDR_WIDTH,
-            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
+            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD,
+            GC_DIFF_ENCODING  => GC_DIFF_ENCODING
         )
         port map(
             clk          => clk,
@@ -101,11 +103,16 @@ begin
             end if;
         end if;
     end process;
+    -- output monitor: bits out = bits in, also with differential encoding (tx encodes, rx decodes).
+    -- Noiseless input, so every bit is trusted, except with encoding the first bit after reset: the rx
+    -- decodes it against the reference, whose trust is '0'
     p_out_monitor : process
+        variable v_first_bit : boolean := true; -- no bit output since reset
     begin
         wait until rising_edge(clk);
         -- check reset behaviour
         if reset = '1' then
+            v_first_bit := true;
             wait for C_MARGIN; -- avoids immediate failure at start of simulation
             check_value(rx_bit_data, '0', "bit_data not low after reset");
             check_value(rx_bit_valid, '0', "bit_valid not low after reset");
@@ -117,7 +124,12 @@ begin
         -- check symbol decoding
         if rx_bit_valid = '1' then
             sb.check_received(rx_bit_data);
-            check_value(rx_bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
+            if GC_DIFF_ENCODING and v_first_bit then
+                check_value(rx_bit_trust, '0', ERROR, "first bit after reset trusted: it is decoded against the reference");
+            else
+                check_value(rx_bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
+            end if;
+            v_first_bit := false;
         end if;
     end process;
 
@@ -167,7 +179,8 @@ begin
         sb.enable(VOID);
         sb.disable_log_msg(ID_DATA); -- don't log every add/check
 
-        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS)); -- log config
+        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS) &
+            " DIFF_ENCODING=" & to_string(GC_DIFF_ENCODING)); -- log config
 
         s_en_pattern <= "1111";
 

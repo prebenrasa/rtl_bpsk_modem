@@ -8,6 +8,8 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge
 from cocotb.utils import get_sim_time
 
+from dut_generics import DutGenerics
+
 
 CLK_PERIOD_NS = 10
 
@@ -285,16 +287,28 @@ class ModemModel:
       the edge after that, the one that samples rx_bit_valid = '1', hence + 1.
     With a random clk_en the expected cycle is not meaningful: the scoreboard
     must skip the latency check then.
+
+    Differential encoding (GC_DIFF_ENCODING): bits out still equal bits in, as tx
+    encodes and rx decodes. The rx decodes the first bit after reset against the
+    reference symbol, whose trust is '0', so that bit's expected trust is 0.
+    reset() marks the next prediction as that first bit.
     """
 
     TX_LATENCY = 3  # accepting edge -> first valid sample
     RX_LATENCY = 4  # edge taking the last sample of a symbol -> rx_bit_valid
 
-    def __init__(self, sps: int, channel_latency: int = 0, expected_trust: int | None = 1):
+    def __init__(self, sps: int, channel_latency: int = 0, expected_trust: int | None = 1,
+                 diff_encoding: bool = False):
         self.latency = self.TX_LATENCY + sps + self.RX_LATENCY + channel_latency  # spec latency in clocks
         self.sampled_latency = self.latency + 1                                     # as BitOutMonitor records it
         self.expected_trust = expected_trust  # None = don't care (noisy channel)
+        self.diff_encoding = diff_encoding
+        self._first_bit = True                # next prediction is the first bit after reset
         self._subscribers: list[Callable[[BitTxn], None]] = []
+
+    def reset(self) -> None:
+        """The DUT was reset: the next accepted bit is the first one decoded against the reference."""
+        self._first_bit = True
 
     def subscribe(self, callback: Callable[[BitTxn], None]) -> None:
         """Call `callback(expected_txn)` for every prediction (e.g. scoreboard.expect)."""
@@ -302,10 +316,14 @@ class ModemModel:
 
     def predict(self, txn: BitTxn) -> BitTxn:
         """Expected rx output for one accepted tx bit; also passed to every subscriber."""
+        trust = self.expected_trust
+        if self.diff_encoding and self._first_bit and trust is not None:
+            trust = 0
+        self._first_bit = False
         expected = BitTxn(
             bit=txn.bit,
             cycle=txn.cycle + self.sampled_latency,
-            trust=self.expected_trust,
+            trust=trust,
         )
         for callback in self._subscribers:
             callback(expected)
@@ -339,6 +357,7 @@ class BitScoreboard:
         self.n_bit_errors = 0        # wrong value (counting mode)
         self.n_untrusted = 0         # observed trust = '0'
         self.n_untrusted_errors = 0  # wrong value with trust = '0'
+        self.errors: list[bool] = []  # per compared bit: wrong value (e.g. errors after acquisition)
 
     def expect(self, txn: BitTxn) -> None:
         self._expected.append(txn)
@@ -363,6 +382,7 @@ class BitScoreboard:
         if self.strict:
             assert not error, f"rx bit {index} at cycle {txn.cycle}: {txn.bit}, expected {expected.bit}"
         self.n_bit_errors += error
+        self.errors.append(error)
         if txn.trust == 0:
             self.n_untrusted += 1
             self.n_untrusted_errors += error
@@ -413,17 +433,17 @@ class BpskTestbench:
 
     def __init__(self, dut, channel=None, strict: bool = True, expected_trust: int | None = 1):
         self.dut = dut
-        self.sps = int(dut.GC_SPS.value)  # generic of this run, read from the DUT
+        self.generics = DutGenerics.from_dut(dut)  # generics of this run, read from the DUT
         self.channel = channel
         if hasattr(dut, "rx_sample_data"):
             assert channel is not None, "bpsk_channel_harness needs a channel between tx and rx samples"
         channel_latency = channel.LATENCY if channel is not None else 0
 
-        self.model = ModemModel(self.sps, channel_latency, expected_trust)
+        self.model = ModemModel(self.generics.sps, channel_latency, expected_trust, self.generics.diff_encoding)
         self.clk_en = ClkEnDriver(dut)
         self.scoreboard = BitScoreboard(strict=strict, check_latency=lambda: self.clk_en.constant)
         # bound for any single wait: a symbol at the slowest clk_en duty, plus the pipeline
-        self.max_wait_cycles = 4 * (self.model.latency + self.sps)
+        self.max_wait_cycles = 4 * (self.model.latency + self.generics.sps)
         self.driver = BitDriver(dut, max_wait_cycles=self.max_wait_cycles)
         self.in_mon = BitInMonitor(dut)
         self.out_mon = BitOutMonitor(dut)
@@ -448,6 +468,7 @@ class BpskTestbench:
         self.dut.reset.value = 1
         await ClockCycles(self.dut.clk, cycles)
         self.scoreboard.flush()
+        self.model.reset()
         self.dut.reset.value = 0
         await RisingEdge(self.dut.clk)
 

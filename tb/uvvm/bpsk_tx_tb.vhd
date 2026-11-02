@@ -15,7 +15,8 @@ entity bpsk_tx_tb is
         GC_SPS          : positive := work.bpsk_pkg.C_DEFAULT_SPS;
         GC_CCPS         : positive := work.bpsk_pkg.f_default_ccps(GC_SPS);
         GC_PHASE_WIDTH  : positive := work.bpsk_pkg.C_DEFAULT_PHASE_WIDTH;
-        GC_ADDR_WIDTH   : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH
+        GC_ADDR_WIDTH    : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH;
+        GC_DIFF_ENCODING : boolean  := false
     );
 end entity bpsk_tx_tb;
 
@@ -41,11 +42,11 @@ architecture bhv of bpsk_tx_tb is
     shared variable sb   : bitvis_vip_scoreboard.int_sb_pkg.t_generic_sb; -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT;    -- watchdog
 
-    -- reference model: the GC_SPS samples expected for an accepted bit
-    procedure add_expected_bit (constant bit_value : std_logic) is
+    -- reference model: the GC_SPS samples expected for the symbol of an accepted bit
+    procedure add_expected_bit (constant symbol : std_logic) is
     begin
         for i in 0 to GC_SPS - 1 loop
-            sb.add_expected(f_tx_sample(C_CFG, bit_value, i));
+            sb.add_expected(f_tx_sample(C_CFG, symbol, i));
         end loop;
     end procedure;
 begin
@@ -62,7 +63,8 @@ begin
             GC_SPS          => GC_SPS,
             GC_CCPS         => GC_CCPS,
             GC_PHASE_WIDTH  => GC_PHASE_WIDTH,
-            GC_ADDR_WIDTH   => GC_ADDR_WIDTH
+            GC_ADDR_WIDTH    => GC_ADDR_WIDTH,
+            GC_DIFF_ENCODING => GC_DIFF_ENCODING
         )
         port map(
             clk          => clk,
@@ -83,15 +85,17 @@ begin
         v_i := (v_i + 1) mod s_en_pattern'length;
     end process;
 
-    -- input monitor: detects accepted input bits and passes them to scoreboard
+    -- input monitor: detects accepted input bits and passes their symbols to scoreboard
     p_in_monitor : process
-        variable v_pending     : boolean := false; -- valid seen without ready
+        variable v_pending     : boolean   := false;            -- valid seen without ready
         variable v_pending_bit : std_logic;
+        variable v_symbol      : std_logic := C_DIFF_REFERENCE; -- last symbol sent: encoder model state
     begin
         wait until rising_edge(clk);
         -- discard waiting samples in scoreboard
         if reset = '1' then
             v_pending := false;
+            v_symbol  := C_DIFF_REFERENCE;
             if not sb.is_empty(VOID) then
                 sb.flush("samples in flight are discarded by reset");
             end if;
@@ -105,7 +109,8 @@ begin
             -- check bit_data hasn't changed and pass accepted bit to model
             if bit_ready = '1' and bit_valid = '1' then
                 check_value(not is_x(bit_data), ERROR, "bit_data unknown at transfer");
-                add_expected_bit(bit_data);
+                v_symbol := f_tx_symbol(GC_DIFF_ENCODING, bit_data, v_symbol);
+                add_expected_bit(v_symbol);
                 v_pending := false;
             elsif bit_valid = '1' then
                 v_pending     := true;
@@ -182,7 +187,8 @@ begin
         sb.enable(VOID);
         sb.disable_log_msg(ID_DATA); -- don't log every add/check
 
-        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS)); -- log config
+        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS) &
+            " DIFF_ENCODING=" & to_string(GC_DIFF_ENCODING)); -- log config
 
         s_en_pattern <= "1111";
 

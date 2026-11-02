@@ -29,7 +29,7 @@ async def test_sample_loopback(dut, clk_en_duty):
     sequence = (
         BitSequence.constant(1, 4)
         + BitSequence.alternating(8)
-        + BitSequence.random(32, gap_prob=0.5, max_gap=2 * tb.sps)
+        + BitSequence.random(32, gap_prob=0.5, max_gap=2 * tb.generics.sps)
     )
     await tb.run(sequence)
     await tb.finish()

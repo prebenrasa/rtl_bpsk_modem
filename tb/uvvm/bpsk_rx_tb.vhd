@@ -16,7 +16,8 @@ entity bpsk_rx_tb is
         GC_CCPS           : positive := work.bpsk_pkg.f_default_ccps(GC_SPS);
         GC_PHASE_WIDTH    : positive := work.bpsk_pkg.C_DEFAULT_PHASE_WIDTH;
         GC_ADDR_WIDTH     : positive := work.bpsk_pkg.C_DEFAULT_ADDR_WIDTH;
-        GC_CORR_THRESHOLD : positive := work.bpsk_pkg.f_default_corr_threshold(GC_SAMPLE_WIDTH)
+        GC_CORR_THRESHOLD : positive := work.bpsk_pkg.f_default_corr_threshold(GC_SAMPLE_WIDTH);
+        GC_DIFF_ENCODING  : boolean  := false
     );
 end entity bpsk_rx_tb;
 
@@ -51,7 +52,8 @@ begin
             GC_CCPS           => GC_CCPS,
             GC_PHASE_WIDTH    => GC_PHASE_WIDTH,
             GC_ADDR_WIDTH     => GC_ADDR_WIDTH,
-            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD
+            GC_CORR_THRESHOLD => GC_CORR_THRESHOLD,
+            GC_DIFF_ENCODING  => GC_DIFF_ENCODING
         )
         port map(
             clk          => clk,
@@ -66,14 +68,17 @@ begin
     -- input monitor: correlates the observed samples with the reference model
     -- (bpsk_tb_pkg) and passes the expected bit of each symbol to the scoreboard
     p_in_monitor : process
-        variable v_symbol   : t_symbol := C_SYMBOL_EMPTY; -- per-symbol state
-        variable v_expected : std_logic;
+        variable v_symbol      : t_symbol  := C_SYMBOL_EMPTY;   -- per-symbol state
+        variable v_predicted   : std_logic;                     -- symbol decision predicted from the samples
+        variable v_prev_symbol : std_logic := C_DIFF_REFERENCE; -- previous predicted symbol: decoder model state
+        variable v_expected    : std_logic;
     begin
         wait until rising_edge(clk);
 
         -- discard waiting bits in scoreboard
         if reset = '1' then
-            v_symbol := C_SYMBOL_EMPTY;
+            v_symbol      := C_SYMBOL_EMPTY;
+            v_prev_symbol := C_DIFF_REFERENCE;
             if not sb.is_empty(VOID) then
                 sb.flush("bits in flight are discarded by reset");
             end if;
@@ -87,10 +92,13 @@ begin
                 v_symbol := f_add_sample(C_CFG, v_symbol, sample_data);
 
                 if v_symbol.count = GC_SPS then
-                    v_expected := f_predict_bit(C_CFG, v_symbol);
-                    if v_expected = C_BIT_DONT_CARE then
+                    v_predicted := f_predict_bit(C_CFG, v_symbol);
+                    if v_predicted = C_BIT_DONT_CARE then
                         log(ID_SEQUENCER, "ambiguous symbol, corr=" & to_string(v_symbol.corr, 1) & ", not checked");
                     end if;
+                    -- decoding: the bit depends on this and the previous symbol, so it is a don't care if either is
+                    v_expected    := f_rx_bit(GC_DIFF_ENCODING, v_predicted, v_prev_symbol);
+                    v_prev_symbol := v_predicted;
                     sb.add_expected(v_expected);
                     v_symbol := C_SYMBOL_EMPTY;
                 end if;
@@ -98,11 +106,16 @@ begin
         end if;
     end process;
 
+    -- output monitor: checks each bit against the scoreboard, and its trust. Noiseless input, so every
+    -- bit is trusted, except with decoding the first bit after reset: it uses the reference as the
+    -- previous symbol, whose trust is '0'
     p_out_monitor : process
+        variable v_first_bit : boolean := true; -- no bit output since reset
     begin
         wait until rising_edge(clk);
         -- check reset behaviour
         if reset = '1' then
+            v_first_bit := true;
             wait for C_MARGIN; -- avoids immediate failure at start of simulation
             check_value(bit_data, '0', "bit_data not low after reset");
             check_value(bit_valid, '0', "bit_valid not low after reset");
@@ -114,7 +127,12 @@ begin
         -- check symbol decoding
         if bit_valid = '1' then
             sb.check_received(bit_data);
-            check_value(bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
+            if GC_DIFF_ENCODING and v_first_bit then
+                check_value(bit_trust, '0', ERROR, "first bit after reset trusted: it is decoded against the reference");
+            else
+                check_value(bit_trust, '1', TB_FAILURE, "Bit correlation low for noiseless input");
+            end if;
+            v_first_bit := false;
         end if;
     end process;
 
@@ -122,6 +140,16 @@ begin
         -- loop integrator of the rx
         alias s_freq is << signal .bpsk_rx_tb.i_dut.s_freq : signed >> ;
         variable v_freq_ref                                : signed(s_freq'range);
+        variable v_tx_symbol                               : std_logic := C_DIFF_REFERENCE; -- encoder model state
+        variable v_bit                                     : std_logic;                     -- bit sent, to compare with bit_data
+
+        -- reset the DUT and the encoder model together, as bpsk_tx and bpsk_rx are reset together
+        procedure reset_dut is
+        begin
+            apply_reset(clk, reset);
+            v_tx_symbol := C_DIFF_REFERENCE;
+        end procedure;
+
         procedure send_sample(constant value : integer; gap_cycles : natural := 0) is
         begin
             for g in 1 to gap_cycles loop
@@ -139,14 +167,21 @@ begin
             sample_valid <= '0';
         end procedure;
 
-        procedure send_symbol(constant bit_value : std_logic; gaps : t_gap_pattern := C_NO_GAPS) is
+        -- the GC_SPS samples of the symbol for bit_value: encoded first when GC_DIFF_ENCODING.
+        -- inverted: the channel flips the carrier by 180 degrees (the encoder model is unaffected)
+        procedure send_symbol(constant bit_value : std_logic; gaps : t_gap_pattern := C_NO_GAPS;
+                              constant inverted : boolean := false) is
+            variable v_line_symbol : std_logic;
         begin
+            v_tx_symbol   := f_tx_symbol(GC_DIFF_ENCODING, bit_value, v_tx_symbol);
+            v_line_symbol := not v_tx_symbol when inverted else v_tx_symbol;
             for i in 0 to GC_SPS - 1 loop
-                send_sample(f_tx_sample(C_CFG, bit_value, i), gaps(gaps'low + i mod gaps'length));
+                send_sample(f_tx_sample(C_CFG, v_line_symbol, i), gaps(gaps'low + i mod gaps'length));
             end loop;
             release_input;
         end procedure;
 
+        -- partial symbols are cut off by a reset: they send bit_value as the symbol and leave the encoder model alone
         procedure send_partial_symbol(constant bit_value : std_logic; constant n_samples : natural) is
         begin
             check_value(n_samples < GC_SPS, TB_FAILURE, "send_partial_symbol: n_samples must be < GC_SPS");
@@ -200,10 +235,11 @@ begin
         sb.enable(VOID);
         sb.disable_log_msg(ID_DATA); -- don't log every add/check
 
-        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS)); -- log config
+        log(ID_LOG_HDR, "Config: SPS=" & to_string(GC_SPS) & " CCPS=" & to_string(GC_CCPS) &
+            " DIFF_ENCODING=" & to_string(GC_DIFF_ENCODING)); -- log config
 
         log(ID_LOG_HDR, "Reset, then recover");
-        apply_reset(clk, reset);
+        reset_dut;
         check_value(bit_data, '0', ERROR, "bit_data low after reset");
         check_value(bit_valid, '0', ERROR, "bit_valid low after reset");
         send_symbol('1');
@@ -230,10 +266,15 @@ begin
         send_bits("101");
         drain;
 
+        -- with encoding, a run of 1s alternates the symbol and a run of 0s repeats it
+        log(ID_LOG_HDR, "Runs of equal bits");
+        send_bits("11111000001");
+        drain;
+
         log(ID_LOG_HDR, "Reset at every position in symbol, then recover");
         for i in 0 to GC_SPS - 1 loop
             send_partial_symbol('1', i);
-            apply_reset(clk, reset);
+            reset_dut;
             check_value(bit_valid, '0', ERROR, "bit_valid low after reset, i=" & to_string(i));
             check_value(bit_data, '0', ERROR, "bit_data default after reset, i=" & to_string(i));
             send_symbol('0');
@@ -244,16 +285,34 @@ begin
         -- be subtracted afterwards, or I and Q keep a permanent offset and the loop drifts. 
         log(ID_LOG_HDR, "Loop state after reset does not depend on the buffer contents before it");
         send_partial_symbol('1', GC_SPS - 1);
-        apply_reset(clk, reset);
+        reset_dut;
         send_bits("1010");
         drain;
         v_freq_ref := s_freq;
         send_shifted_partial_symbol('1', GC_SPS - 1);
-        apply_reset(clk, reset);
+        reset_dut;
         send_bits("1010");
         drain;
         check_value(s_freq = v_freq_ref, ERROR, "s_freq after reset depends on the buffer contents before it: " &
         to_string(to_integer(s_freq)) & ", expected " & to_string(to_integer(v_freq_ref)));
+
+        -- the scoreboard follows the samples, so it cannot tell an inversion apart: compare with the sent bits.
+        -- The first bit after reset is decoded against the reference and comes out inverted either way;
+        -- after it, decoding cancels the inversion, while without encoding every bit stays inverted
+        log(ID_LOG_HDR, "Carrier inverted by 180 degrees: decoding cancels the inversion");
+        reset_dut;
+        for i in 0 to 7 loop
+            v_bit := '1' when i mod 3 = 0 else '0'; -- runs of 0s and isolated 1s
+            send_symbol(v_bit, inverted => true);
+            step(clk, C_RX_LATENCY);
+            check_value(bit_valid, '1', ERROR, "inverted carrier: valid high after latency, i=" & to_string(i));
+            if GC_DIFF_ENCODING and i > 0 then
+                check_value(bit_data, v_bit, ERROR, "inverted carrier: bit not restored by decoding, i=" & to_string(i));
+            else
+                check_value(bit_data, not v_bit, ERROR, "inverted carrier: bit not inverted, i=" & to_string(i));
+            end if;
+            drain;
+        end loop;
 
         log(ID_LOG_HDR, "sample_valid patterns");
         for i in 0 to 2 loop

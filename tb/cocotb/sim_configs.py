@@ -21,8 +21,12 @@ def sim_configs(target: str) -> list[str]:
     return configs or ["default"]
 
 
-def parse_config(config: str) -> dict[str, int]:
-    """"GC_SPS=8,GC_CCPS=2" -> {"GC_SPS": 8, "GC_CCPS": 2}; "default" -> {}."""
+def parse_config(config: str) -> dict[str, int | str]:
+    """"GC_SPS=8,GC_DIFF_ENCODING=true" -> {"GC_SPS": 8, "GC_DIFF_ENCODING": "true"}; "default" -> {}.
+
+    Integers become int; anything else (a VHDL boolean such as true) is passed to GHDL as written.
+    """
     if config == "default":
         return {}
-    return {name: int(value) for name, value in (item.split("=") for item in config.split(","))}
+    items = (item.split("=") for item in config.split(","))
+    return {name: int(value) if value.lstrip("-").isdigit() else value for name, value in items}

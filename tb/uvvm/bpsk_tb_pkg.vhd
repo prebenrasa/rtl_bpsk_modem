@@ -16,6 +16,9 @@
 --   Carrier    : f_amplitude, f_step, f_step_is_exact, f_lut_sample,
 --                f_carrier_sample, f_tx_sample: the sample the tx sends, bit
 --                exact (LUT address = top GC_ADDR_WIDTH phase bits).
+--   Encoding   : C_DIFF_REFERENCE, f_tx_symbol: the symbol sent for a bit, with or
+--                without differential encoding; f_rx_bit: the bit the rx outputs
+--                for a symbol (the caller keeps the state in both).
 --   Correlator : t_symbol, f_add_sample, f_predict_bit: expected rx decision
 --                from an ideal (untruncated) carrier, with a don't care when the
 --                correlation is within the DUT's quantisation error of zero.
@@ -40,8 +43,8 @@ context uvvm_util.uvvm_util_context;
 package bpsk_tb_pkg is
 
     -- timing ------------------------------------------------------------------
-    constant C_TCLK   : time := 10 ns;     -- clock period
-    constant C_MARGIN : time := C_TCLK/4;  -- settle time after an edge before checking or driving
+    constant C_TCLK   : time := 10 ns;    -- clock period
+    constant C_MARGIN : time := C_TCLK/4; -- settle time after an edge before checking or driving
 
     constant C_TX_LATENCY : natural := 3; -- tx: clocks from the edge that accepts a bit to its first valid sample
     constant C_RX_LATENCY : natural := 4; -- rx: clocks from the edge that takes the last sample of a symbol to bit_valid
@@ -73,12 +76,24 @@ package bpsk_tb_pkg is
     procedure apply_reset(signal clk : in std_logic; signal reset : out std_logic);
 
     -- carrier model (bit exact with the tx) -----------------------------------
-    function f_amplitude(cfg : t_bpsk_cfg) return integer;          -- peak sample value 2**(L-1) - 1
-    function f_step(cfg : t_bpsk_cfg) return unsigned;              -- NCO step ccps * 2**N / sps, N bits
-    function f_step_is_exact(cfg : t_bpsk_cfg) return boolean;      -- step has no remainder: no phase drift
-    function f_lut_sample(cfg : t_bpsk_cfg; phase : unsigned) return integer; -- sine LUT value for a phase
-    function f_carrier_sample(cfg : t_bpsk_cfg; index : natural) return integer; -- carrier at sample index in a symbol
+    function f_amplitude(cfg     : t_bpsk_cfg) return integer;                                     -- peak sample value 2**(L-1) - 1
+    function f_step(cfg          : t_bpsk_cfg) return unsigned;                                    -- NCO step ccps * 2**N / sps, N bits
+    function f_step_is_exact(cfg : t_bpsk_cfg) return boolean;                                     -- step has no remainder: no phase drift
+    function f_lut_sample(cfg : t_bpsk_cfg; phase : unsigned) return integer;                      -- sine LUT value for a phase
+    function f_carrier_sample(cfg : t_bpsk_cfg; index : natural) return integer;                   -- carrier at sample index in a symbol
     function f_tx_sample(cfg : t_bpsk_cfg; bit_value : std_logic; index : natural) return integer; -- +carrier for '1', -carrier for '0'
+
+    -- differential encoding ---------------------------------------------------
+    -- symbol d(n) = b(n) xor d(n-1): the model's state is the previous symbol, not the previous bit.
+    -- sets bit to C_DIFF_REFERENCE on reset.
+    constant C_DIFF_REFERENCE : std_logic := '0'; -- d(-1): the symbol state of tx (and rx) after reset
+
+    -- the symbol sent for bit_value: bit_value itself, or bit_value xor prev_symbol when encoding
+    function f_tx_symbol(diff_encoding : boolean; bit_value : std_logic; prev_symbol : std_logic) return std_logic;
+
+    -- the bit the rx outputs for a predicted symbol: the symbol itself, or symbol xor prev_symbol when
+    -- decoding. 
+    function f_rx_bit(diff_encoding : boolean; symbol : std_logic; prev_symbol : std_logic) return std_logic;
 
     -- correlator model --------------------------------------------------------
     type t_symbol is record
@@ -90,7 +105,7 @@ package bpsk_tb_pkg is
     constant C_SYMBOL_EMPTY : t_symbol := (corr => 0.0, abs_sum => 0.0, count => 0);
 
     function f_ideal_carrier(cfg : t_bpsk_cfg; index : natural) return real; -- untruncated carrier, LUT scale
-    function f_eps_max(cfg : t_bpsk_cfg) return real;                         -- worst |LUT - ideal| per sample, LSB
+    function f_eps_max(cfg : t_bpsk_cfg) return real;                        -- worst |LUT - ideal| per sample, LSB
     function f_add_sample(cfg : t_bpsk_cfg; sym : t_symbol; x : signed) return t_symbol;
     function f_predict_bit(cfg : t_bpsk_cfg; sym : t_symbol) return std_logic; -- '1', '0' or C_BIT_DONT_CARE
 
@@ -112,7 +127,7 @@ package body bpsk_tb_pkg is
     function f_bpsk_cfg(sample_width, sps, ccps, phase_width, addr_width : positive) return t_bpsk_cfg is
     begin
         return (sample_width => sample_width, sps => sps, ccps => ccps,
-                phase_width => phase_width, addr_width => addr_width);
+        phase_width => phase_width, addr_width => addr_width);
     end function;
 
     procedure step(signal clk : in std_logic; constant n : in positive := 1) is
@@ -163,7 +178,7 @@ package body bpsk_tb_pkg is
 
     function f_lut_sample(cfg : t_bpsk_cfg; phase : unsigned) return integer is
         constant C_PHASE : unsigned(phase'length - 1 downto 0) := phase;
-        constant C_ADDR  : natural := to_integer(C_PHASE(C_PHASE'high downto C_PHASE'high - cfg.addr_width + 1));
+        constant C_ADDR  : natural                             := to_integer(C_PHASE(C_PHASE'high downto C_PHASE'high - cfg.addr_width + 1));
     begin
         return integer(round(sin(MATH_2_PI * real(C_ADDR) / real(2 ** cfg.addr_width)) * real(f_amplitude(cfg))));
     end function;
@@ -180,14 +195,38 @@ package body bpsk_tb_pkg is
     function f_tx_sample(cfg : t_bpsk_cfg; bit_value : std_logic; index : natural) return integer is
     begin
         assert index < cfg.sps
-            report "f_tx_sample: index " & to_string(index) & " outside symbol" severity failure;
+        report "f_tx_sample: index " & to_string(index) & " outside symbol" severity failure;
         assert bit_value = '0' or bit_value = '1'
-            report "f_tx_sample: bit_value not 0/1" severity failure;
+        report "f_tx_sample: bit_value not 0/1" severity failure;
 
         if bit_value = '1' then
             return f_carrier_sample(cfg, index);
         else
             return -f_carrier_sample(cfg, index);
+        end if;
+    end function;
+
+    function f_tx_symbol(diff_encoding : boolean; bit_value : std_logic; prev_symbol : std_logic) return std_logic is
+    begin
+        if not diff_encoding then
+            return bit_value;
+        elsif bit_value = prev_symbol then -- written as a comparison, not with xor as in the RTL
+            return '0';
+        else
+            return '1';
+        end if;
+    end function;
+
+    function f_rx_bit(diff_encoding : boolean; symbol : std_logic; prev_symbol : std_logic) return std_logic is
+    begin
+        if not diff_encoding then
+            return symbol;
+        elsif symbol = C_BIT_DONT_CARE or prev_symbol = C_BIT_DONT_CARE then
+            return C_BIT_DONT_CARE;
+        elsif symbol = prev_symbol then -- unchanged polarity: bit '0'
+            return '0';
+        else
+            return '1';
         end if;
     end function;
 

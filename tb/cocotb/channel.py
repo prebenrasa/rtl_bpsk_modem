@@ -9,6 +9,8 @@ import cocotb
 from cocotb.triggers import RisingEdge
 from cocotb.types import LogicArray
 
+from dut_generics import DutGenerics
+
 
 class AwgnChannel:
     """tx_sample_* -> gain -> + AWGN -> round/saturate -> rx_sample_*, one clock of latency.
@@ -27,10 +29,11 @@ class AwgnChannel:
 
     def __init__(self, dut, ebn0_db: float | None, headroom_sigmas: float = 4.0):
         self.dut = dut
-        self.width = len(dut.tx_sample_data)
-        self.max_value = 2 ** (self.width - 1) - 1
-        self.min_value = -(2 ** (self.width - 1))
-        sps = int(dut.GC_SPS.value)
+        self.generics = DutGenerics.from_dut(dut)
+        self.width = self.generics.sample_width
+        self.max_value = self.generics.max_sample
+        self.min_value = self.generics.min_sample
+        sps = self.generics.sps
 
         if ebn0_db is None:
             self.gain, self.sigma = 1.0, 0.0
@@ -89,21 +92,28 @@ class PhaseOffsetChannel(AwgnChannel):
         (2b - 1) * A * sin(2 pi (GC_CCPS / GC_SPS * k + freq_offset * m) + phase)
     with k = m mod GC_SPS the index within the symbol, then gain, AWGN and
     rounding as in AwgnChannel. Symbol timing is unchanged (LATENCY 1).
+
+    With differential encoding (GC_DIFF_ENCODING) the tx sends the symbol
+    d = b xor d_prev, not the bit b, so on_bit encodes the same way: the
+    previous symbol is the state, '0' (the reference) after reset.
     """
 
     def __init__(self, dut, phase_deg: float, freq_offset: float = 0.0, ebn0_db: float | None = None):
         super().__init__(dut, ebn0_db)
-        self.sps = int(dut.GC_SPS.value)
-        self.ccps = int(dut.GC_CCPS.value)
+        self.sps = self.generics.sps
+        self.ccps = self.generics.ccps
         self.phase = math.radians(phase_deg)
         self.freq_offset = freq_offset  # cycles per sample
-        self._bits: list[int] = []
+        self.diff_encoding = self.generics.diff_encoding
+        self._symbol = 0  # last symbol queued: encoder state, the reference after reset
+        self._bits: list[int] = []  # symbols of accepted bits, not yet sent
         self._bit = 0
         self._m = 0
 
     def on_bit(self, txn) -> None:
-        """BitInMonitor callback: queue the bit of the next symbol."""
-        self._bits.append(txn.bit)
+        """BitInMonitor callback: queue the symbol of the next accepted bit."""
+        self._symbol = txn.bit ^ self._symbol if self.diff_encoding else txn.bit
+        self._bits.append(self._symbol)
 
     async def _run(self) -> None:
         dut = self.dut
@@ -111,6 +121,7 @@ class PhaseOffsetChannel(AwgnChannel):
             await RisingEdge(dut.clk)
             if dut.reset.value == 1:
                 self._bits.clear()
+                self._symbol = 0
                 self._m = 0
                 self._drive(0, 0)
             elif dut.tx_sample_valid.value != 1:
