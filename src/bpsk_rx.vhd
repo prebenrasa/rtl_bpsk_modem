@@ -58,9 +58,12 @@
 --     error sign(I) * Q adjusts the NCO step, with I and Q the moving sums of
 --     sample * carrier over the last GC_SPS samples. It locks
 --     at 0 or 180 degrees; at 180 degrees every bit is inverted.
+--   - Loop delay: the step updates 3 clocks after the moving sums (error,
+--     integral, step), and the NCO adds C_NCO_LATENCY before the new phase
+--     reaches the multipliers.
 --   - Loop precision: the loop filter keeps C_FRAC_WIDTH = max(GC_KP, GC_KI)
---     fraction bits below the step LSB. The rx NCO accumulator is GC_PHASE_WIDTH + C_FRAC_WIDTH bits wide
---     and takes the full-precision step.
+--     fraction bits below the step LSB. The rx NCO accumulator is
+--     GC_PHASE_WIDTH + C_FRAC_WIDTH bits wide and takes the full-precision step.
 --   - Symbol timing is not recovered: symbol boundaries follow from the sample
 --     counter, so tx and rx must be reset together.
 --------------------------------------------------------------------------------
@@ -131,8 +134,10 @@ architecture rtl of bpsk_rx is
     signal s_sine_prod_dly : signed_array_t(GC_SPS - 1 downto 0)(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
     signal s_cos_prod_dly  : signed_array_t(GC_SPS - 1 downto 0)(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
     signal s_prod_i        : integer range 0 to GC_SPS - 1                                         := 0;
-    signal s_acc_valid     : std_logic                                                             := '0'; -- high when the moving sums hold a new sample
-    signal s_window_full   : std_logic                                                             := '0'; -- high once all GC_SPS buffer entries were written since reset
+    signal s_acc_valid     : std_logic                                                             := '0';             -- high when the moving sums hold a new sample
+    signal s_window_full   : std_logic                                                             := '0';             -- high once all GC_SPS buffer entries were written since reset
+    signal s_p_term        : signed(C_FREQ_WIDTH - 1 downto 0)                                     := (others => '0'); -- proportional correction of the sample in stage 2, registered for stage 3, C_FRAC_WIDTH fraction bits
+    signal s_freq_valid    : std_logic                                                             := '0';             -- high when s_freq and s_p_term hold a new sample (stage 3 enable)
 
     -- bit decision
     signal s_sine_product     : signed(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
@@ -274,14 +279,14 @@ begin
 
     p_costas_loop : process (clk, reset)
         variable v_i_term : signed(C_FREQ_WIDTH - 1 downto 0); -- integral increment, C_FRAC_WIDTH fraction bits
-        variable v_freq   : signed(C_FREQ_WIDTH - 1 downto 0); -- new s_freq, also used by stage 3 in the same edge
-        variable v_p_term : signed(C_FREQ_WIDTH - 1 downto 0); -- proportional correction, C_FRAC_WIDTH fraction bits
     begin
         if reset = '1' then
             s_error       <= (others => '0');
             s_freq        <= (others => '0');
+            s_p_term      <= (others => '0');
             s_step_size   <= C_STEP_SIZE_Q;
             s_error_valid <= '0';
+            s_freq_valid  <= '0';
         elsif rising_edge(clk) then
             if s_acc_valid = '1' then
                 -- stage 1: compute e
@@ -293,17 +298,20 @@ begin
             end if;
 
             s_error_valid <= s_acc_valid;
+            s_freq_valid  <= s_error_valid;
+
             if s_error_valid = '1' then
                 -- stage 2: integral path, accumulated with C_FRAC_WIDTH fraction bits, saturated at +-GC_FREQ_LIMIT
                 v_i_term := f_scale(s_error, GC_KI - C_FRAC_WIDTH, C_FREQ_WIDTH);
-                v_freq   := f_add_sat(s_freq, v_i_term, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH);
-                s_freq <= v_freq;
+                s_freq   <= f_add_sat(s_freq, v_i_term, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH);
+                s_p_term <= f_scale(s_error, GC_KP - C_FRAC_WIDTH, C_FREQ_WIDTH);
+            end if;
 
+            if s_freq_valid = '1' then
                 -- stage 3: step = nominal + proportional + integral, all with C_FRAC_WIDTH fraction bits;
                 -- No rounding to N bits: the NCO accumulator takes the fraction and carries it into the phase.
                 -- correction is saturated within C_STEP_SIZE +- GC_FREQ_LIMIT
-                v_p_term := f_scale(s_error, GC_KP - C_FRAC_WIDTH, C_FREQ_WIDTH);
-                s_step_size <= C_STEP_SIZE_Q + unsigned(f_add_sat(v_p_term, v_freq, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH));
+                s_step_size <= C_STEP_SIZE_Q + unsigned(f_add_sat(s_p_term, s_freq, GC_FREQ_LIMIT, C_FREQ_WIDTH, C_FRAC_WIDTH));
             end if;
         end if;
     end process;
@@ -320,11 +328,11 @@ begin
             s_sine_valid_m  <= '0';
             s_last_m        <= '0';
         elsif rising_edge(clk) then
-            -- stage 1: ctrl and data for multiply stage (in p_i_decision_data and p_q_decision_data)
+            -- stage 1: ctrl and data for multiply stage (in p_decision_storage)
             s_sine_valid_m <= s_sine_valid;
             s_last_m       <= s_sine_valid and s_last_dly(s_last_dly'high);
 
-            -- stage 2: accumulate is done and accmulator holds the symbol correlation
+            -- stage 2: the moving sums hold the symbol correlation (all GC_SPS products of this symbol)
             s_decision_done <= s_sine_valid_m and s_last_m;
 
             -- stage 3: decision
