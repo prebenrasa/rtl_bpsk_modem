@@ -1,5 +1,9 @@
-sim/
+# all generated output (GHDL, cocotb, Vivado) goes to build/
 build/
+# Python bytecode next to the cocotb tests
+__pycache__/
+# output from before the move to build/
+sim/
 .Xil/
 clockInfo.txt
 *.jou
@@ -7,3 +11,9 @@ clockInfo.txt
 *.str
 *.ghw
 *.cf
+sim_build/
+results*.xml
+.pytest_cache/
+
+# machine-specific Makefile settings (template: local.mk.example)
+local.mk
