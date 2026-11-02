@@ -8,6 +8,7 @@ context uvvm_util.uvvm_util_context;
 library bitvis_vip_scoreboard;
 use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
 use work.bpsk_tb_pkg.all;
+use work.bit_stream_bfm_pkg.all;
 
 entity bpsk_tx_tb is
     generic (
@@ -154,14 +155,14 @@ begin
     end process;
 
     p_stimulus : process
-        procedure send_bit (constant bit_value : std_logic) is
+        -- local wrappers of bit_stream_bfm_pkg, bound to this testbench's signals
+        procedure send_bit(constant bit_value : std_logic) is
         begin
-            bit_data  <= bit_value;
-            bit_valid <= '1';
-            loop wait until rising_edge(clk);
-                exit when bit_ready = '1';
-            end loop;
-            bit_valid <= '0';
+            send_bit(bit_value, clk, bit_data, bit_valid, bit_ready);
+        end procedure;
+        procedure send_bits(constant bits : std_logic_vector) is
+        begin
+            send_bits(bits, clk, bit_data, bit_valid, bit_ready);
         end procedure;
 
         procedure drain is -- wait until every expected sample has arrived, then check nothing else follows
@@ -181,6 +182,7 @@ begin
         set_alert_stop_limit(ERROR, 0);    -- see every failure, not just the first
         set_alert_stop_limit(TB_ERROR, 0); -- the scoreboard reports a stray valid as TB_ERROR
         disable_log_msg(ID_POS_ACK);       -- don't log every passing check
+        disable_log_msg(ID_BFM);           -- don't log every bit the BFM sends
 
         sb.config(C_SB_CONFIG_DEFAULT);
         sb.set_scope("BPSK_TX SB");
@@ -210,25 +212,21 @@ begin
 
         log(ID_LOG_HDR, "High bit back-to-back input");
         v_run_count_before := s_run_count;
-        send_bit('1');
-        send_bit('1');
+        send_bits("11");
         drain;
         check_value(s_run_count, v_run_count_before + 1, ERROR, "Incorrect run count");
         check_value(s_last_run_length, 2 * GC_SPS, ERROR, "Incorrect number of consecutive output samples");
 
         log(ID_LOG_HDR, "Low bit back-to-back input");
         v_run_count_before := s_run_count;
-        send_bit('0');
-        send_bit('0');
+        send_bits("00");
         drain;
         check_value(s_run_count, v_run_count_before + 1, ERROR, "Incorrect run count");
         check_value(s_last_run_length, 2 * GC_SPS, ERROR, "Incorrect number of consecutive output samples");
 
         log(ID_LOG_HDR, "High-Low-High bit back-to-back input");
         v_run_count_before := s_run_count;
-        send_bit('1');
-        send_bit('0');
-        send_bit('1');
+        send_bits("101");
         drain;
         check_value(s_run_count, v_run_count_before + 1, ERROR, "Incorrect run count");
         check_value(s_last_run_length, 3 * GC_SPS, ERROR, "Incorrect number of consecutive output samples");
@@ -259,10 +257,7 @@ begin
                 when 1      => s_en_pattern      <= "1101";
                 when others => s_en_pattern <= "1000";
             end case;
-            send_bit('0');
-            send_bit('1');
-            send_bit('0');
-            send_bit('1');
+            send_bits("0101");
             drain;
             check_value(s_run_count, v_run_count_before + 1, ERROR, "Incorrect run count");
             check_value(s_last_run_length, 4 * GC_SPS, ERROR, "Incorrect number of consecutive output samples");

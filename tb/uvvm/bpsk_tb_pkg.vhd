@@ -23,6 +23,9 @@
 --                from an ideal (untruncated) carrier, with a don't care when the
 --                correlation is within the DUT's quantisation error of zero.
 --   Scoreboard : C_BIT_DONT_CARE and f_bit_match for bpsk_bit_sb_pkg.
+--   Stimulus   : not here. bit_stream_bfm_pkg drives the valid/ready bit input
+--                (bpsk_tx_tb, bpsk_modem_tb), sample_stream_bfm_pkg the sample
+--                input (bpsk_rx_tb, built on f_tx_sample).
 --
 -- Notes
 --   - Independent of the RTL: nothing here uses bpsk_pkg or nco_pkg. Latencies

@@ -9,6 +9,7 @@ context uvvm_util.uvvm_util_context;
 library bitvis_vip_scoreboard;
 use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
 use work.bpsk_tb_pkg.all;
+use work.bit_stream_bfm_pkg.all;
 
 entity bpsk_modem_tb is
     generic (
@@ -134,24 +135,14 @@ begin
     end process;
 
     p_stimulus : process
-        procedure release_input is
+        -- local wrappers of bit_stream_bfm_pkg, bound to this testbench's signals
+        procedure send_bit(constant bit_value : std_logic) is
         begin
-            tx_bit_valid <= '0';
-        end procedure;
-        procedure send_bit (constant bit_value : std_logic) is
-        begin
-            tx_bit_data  <= bit_value;
-            tx_bit_valid <= '1';
-            loop wait until rising_edge(clk);
-                exit when tx_bit_ready = '1';
-            end loop;
-            release_input;
+            send_bit(bit_value, clk, tx_bit_data, tx_bit_valid, tx_bit_ready);
         end procedure;
         procedure send_bits(constant bits : std_logic_vector) is
         begin
-            for i in bits'range loop
-                send_bit(bits(i));
-            end loop;
+            send_bits(bits, clk, tx_bit_data, tx_bit_valid, tx_bit_ready);
         end procedure;
         procedure drain is                                        -- wait for every expected bit, but at most C_DRAIN_LIMIT enabled edges
             constant C_DRAIN_LIMIT : positive := C_MODEM_LATENCY + 2; -- latency + margin
@@ -173,6 +164,7 @@ begin
         set_alert_stop_limit(ERROR, 0);    -- see every failure, not just the first
         set_alert_stop_limit(TB_ERROR, 0); -- the scoreboard reports a stray valid as TB_ERROR
         disable_log_msg(ID_POS_ACK);       -- don't log every passing check
+        disable_log_msg(ID_BFM);           -- don't log every bit the BFM sends
 
         sb.config(C_SB_CONFIG_DEFAULT);
         sb.set_scope("BPSK_MODEM SB");

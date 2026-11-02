@@ -8,6 +8,7 @@ context uvvm_util.uvvm_util_context;
 library bitvis_vip_scoreboard;
 use bitvis_vip_scoreboard.generic_sb_support_pkg.all;
 use work.bpsk_tb_pkg.all;
+use work.sample_stream_bfm_pkg.all;
 
 entity bpsk_rx_tb is
     generic (
@@ -35,11 +36,6 @@ architecture bhv of bpsk_rx_tb is
     -- tb helpers
     shared variable sb   : work.bpsk_bit_sb_pkg.t_generic_sb;          -- scoreboard
     signal watchdog_ctrl : t_watchdog_ctrl := C_WATCHDOG_CTRL_DEFAULT; -- watchdog
-
-    -- per-sample number of idle edges before the sample, cycled over the symbol
-    type t_gap_pattern is array (natural range <>) of natural;
-    constant C_NO_GAPS     : t_gap_pattern(0 to 0) := (0 => 0);
-    signal s_valid_pattern : t_gap_pattern(0 to 3) := (0, 1, 0, 3); -- number of idle edges before samples
 
 begin
     clock_generator(clk, C_TCLK);
@@ -142,6 +138,7 @@ begin
         variable v_freq_ref                                : signed(s_freq'range);
         variable v_tx_symbol                               : std_logic := C_DIFF_REFERENCE; -- encoder model state
         variable v_bit                                     : std_logic;                     -- bit sent, to compare with bit_data
+        variable v_gaps                                    : t_gap_pattern(0 to 3);         -- idle edges before each sample
 
         -- reset the DUT and the encoder model together, as bpsk_tx and bpsk_rx are reset together
         procedure reset_dut is
@@ -150,21 +147,10 @@ begin
             v_tx_symbol := C_DIFF_REFERENCE;
         end procedure;
 
-        procedure send_sample(constant value : integer; gap_cycles : natural := 0) is
+        -- local wrappers of sample_stream_bfm_pkg, bound to this testbench's signals and C_CFG
+        procedure send_sample(constant value : integer) is
         begin
-            for g in 1 to gap_cycles loop
-                sample_valid <= '0';
-                step(clk, 1);
-            end loop;
-            sample_valid <= '1';
-            sample_data  <= to_signed(value, sample_data'length);
-            step(clk, 1);
-        end procedure;
-
-        -- input back to idle: no transfer on the next edge
-        procedure release_input is
-        begin
-            sample_valid <= '0';
+            send_sample(value, clk, sample_data, sample_valid);
         end procedure;
 
         -- the GC_SPS samples of the symbol for bit_value: encoded first when GC_DIFF_ENCODING.
@@ -175,20 +161,13 @@ begin
         begin
             v_tx_symbol   := f_tx_symbol(GC_DIFF_ENCODING, bit_value, v_tx_symbol);
             v_line_symbol := not v_tx_symbol when inverted else v_tx_symbol;
-            for i in 0 to GC_SPS - 1 loop
-                send_sample(f_tx_sample(C_CFG, v_line_symbol, i), gaps(gaps'low + i mod gaps'length));
-            end loop;
-            release_input;
+            send_symbol(v_line_symbol, C_CFG, clk, sample_data, sample_valid, gaps);
         end procedure;
 
         -- partial symbols are cut off by a reset: they send bit_value as the symbol and leave the encoder model alone
         procedure send_partial_symbol(constant bit_value : std_logic; constant n_samples : natural) is
         begin
-            check_value(n_samples < GC_SPS, TB_FAILURE, "send_partial_symbol: n_samples must be < GC_SPS");
-            for i in 0 to n_samples - 1 loop
-                send_sample(f_tx_sample(C_CFG, bit_value, i));
-            end loop;
-            release_input;
+            send_partial_symbol(bit_value, n_samples, C_CFG, clk, sample_data, sample_valid);
         end procedure;
 
         -- carrier phase shifted by one sample (360 * GC_CCPS / GC_SPS degrees): the products then have a
@@ -199,7 +178,7 @@ begin
             for i in 0 to n_samples - 1 loop
                 send_sample(f_tx_sample(C_CFG, bit_value, (i + 1) mod GC_SPS));
             end loop;
-            release_input;
+            release_sample_stream(sample_valid);
         end procedure;
 
         procedure send_bits(constant bits : std_logic_vector) is
@@ -229,6 +208,7 @@ begin
         set_alert_stop_limit(ERROR, 0);    -- see every failure, not just the first
         set_alert_stop_limit(TB_ERROR, 0); -- the scoreboard reports a stray valid as TB_ERROR
         disable_log_msg(ID_POS_ACK);       -- don't log every passing check
+        disable_log_msg(ID_BFM);           -- don't log every symbol the BFM sends
 
         sb.config(C_SB_CONFIG_DEFAULT);
         sb.set_scope("BPSK_RX SB");
@@ -314,17 +294,18 @@ begin
             drain;
         end loop;
 
+        -- a variable, so each pattern applies from the first symbol after it is set
         log(ID_LOG_HDR, "sample_valid patterns");
         for i in 0 to 2 loop
             case i is
-                when 0      => s_valid_pattern      <= (0, 1, 0, 3);
-                when 1      => s_valid_pattern      <= (2, 0, 0, 3);
-                when others => s_valid_pattern <= (0, 0, 0, 3);
+                when 0      => v_gaps := (0, 1, 0, 3);
+                when 1      => v_gaps := (2, 0, 0, 3);
+                when others => v_gaps := (0, 0, 0, 3);
             end case;
-            send_symbol('0', s_valid_pattern);
-            send_symbol('1', s_valid_pattern);
-            send_symbol('0', s_valid_pattern);
-            send_symbol('1', s_valid_pattern);
+            send_symbol('0', v_gaps);
+            send_symbol('1', v_gaps);
+            send_symbol('0', v_gaps);
+            send_symbol('1', v_gaps);
             drain;
         end loop;
 
