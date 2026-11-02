@@ -1,8 +1,9 @@
 """pytest launcher for every cocotb test module in tb/cocotb/ (cocotb_tools.runner).
 
 TARGETS lists each HDL toplevel and the cocotb test modules that run against it. Each toplevel
-is compiled once; each configuration of configs/sim_configs.txt (section cocotb_<toplevel>)
-is one pytest test that runs the simulation with its generics.
+is compiled once per worker; each configuration of configs/sim_configs.txt (section cocotb_<toplevel>)
+is one pytest test that runs the simulation with its generics. The configurations run in parallel
+(pytest-xdist, addopts in pyproject.toml); -n 0 runs them one after another in this process.
 
 To add tests:
 - for an existing toplevel: add the module name to its list in TARGETS;
@@ -44,9 +45,15 @@ def rtl_sources() -> list[str]:
     return out.stdout.split()
 
 
+def lib_dir(toplevel: str) -> Path:
+    """Compiled library of a toplevel, one per pytest-xdist worker: GHDL's mcode backend reads the
+    library while a simulation runs, so a worker compiling into a shared one would break another's run."""
+    return BUILD_DIR / toplevel / "lib" / os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+
 def ghdl_args(toplevel: str) -> list[str]:
-    # --workdir: each configuration runs in its own folder, but the compiled library is in the toplevel's build folder
-    return ["--std=08", f"--workdir={BUILD_DIR / toplevel}"]
+    # --workdir: each configuration runs in its own folder, but the compiled library is in lib_dir
+    return ["--std=08", f"--workdir={lib_dir(toplevel)}"]
 
 
 def config_id(config: str) -> str:
@@ -65,7 +72,7 @@ def build():
             runner.build(
                 sources=rtl_sources(),
                 hdl_toplevel=toplevel,
-                build_dir=BUILD_DIR / toplevel,
+                build_dir=lib_dir(toplevel),
                 build_args=ghdl_args(toplevel),
                 always=True,
             )
@@ -84,7 +91,7 @@ def test_cocotb(build, toplevel, config):
     build(toplevel).test(
         test_module=TARGETS[toplevel],
         hdl_toplevel=toplevel,
-        build_dir=BUILD_DIR / toplevel,
+        build_dir=lib_dir(toplevel),
         test_dir=BUILD_DIR / toplevel / config_id(config),
         test_args=ghdl_args(toplevel),
         parameters=parse_config(config),
