@@ -69,8 +69,8 @@ entity bpsk_modem is
         GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                    -- N accumulator width
         GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                     -- M LUT address = top M bits of the phase
         GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH); -- threshold for classifying decision as trustworthy
-        GC_KP             : integer  := 2 * GC_SAMPLE_WIDTH + 2 * integer(ceil(log2(real(GC_SPS)))) - GC_PHASE_WIDTH + 1; -- loop proportional gain 2**-GC_KP
-        GC_KI             : integer  := GC_KP + 4;                                                                        -- loop integral gain 2**-GC_KI
+        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
+        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
         GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
     );
     port (

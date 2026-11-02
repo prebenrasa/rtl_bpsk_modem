@@ -24,7 +24,7 @@
 --                     corrected per symbol (2*L + 2*log2(SPS) - N + 1).
 --   GC_KI            : Costas loop integral gain as a shift: the phase error is
 --                     added to the frequency correction scaled by 2**-GC_KI.
---                     Larger than GC_KP. Default: GC_KP + 4 (near critical damping).
+--                     Larger than GC_KP. Default: GC_KP + 4 + log2(SPS) (f_default_ki).
 --   GC_FREQ_LIMIT    : pull-in range of the frequency correction, in NCO step
 --                     LSBs: s_freq and the total correction (proportional +
 --                     s_freq) saturate at +-GC_FREQ_LIMIT instead of
@@ -54,8 +54,9 @@
 --
 -- Notes
 --   - Samples are qualified by sample valid strobe from upstream.
---   - Carrier phase is recovered by a Costas loop: the error sign(I) * Q of
---     each symbol adjusts the NCO step. It locks
+--   - Carrier phase is recovered by a Costas loop: every valid sample, the
+--     error sign(I) * Q adjusts the NCO step, with I and Q the moving sums of
+--     sample * carrier over the last GC_SPS samples. It locks
 --     at 0 or 180 degrees; at 180 degrees every bit is inverted.
 --   - Loop precision: the loop filter keeps C_FRAC_WIDTH = max(GC_KP, GC_KI)
 --     fraction bits below the step LSB. The rx NCO accumulator is GC_PHASE_WIDTH + C_FRAC_WIDTH bits wide
@@ -79,8 +80,8 @@ entity bpsk_rx is
         GC_PHASE_WIDTH    : positive := C_DEFAULT_PHASE_WIDTH;                                                            -- N accumulator width
         GC_ADDR_WIDTH     : positive := C_DEFAULT_ADDR_WIDTH;                                                             -- M LUT address = top M bits of the phase
         GC_CORR_THRESHOLD : positive := f_default_corr_threshold(GC_SAMPLE_WIDTH);                                        -- threshold for classifying decision as trustworthy
-        GC_KP             : integer  := 2 * GC_SAMPLE_WIDTH + 2 * integer(ceil(log2(real(GC_SPS)))) - GC_PHASE_WIDTH + 1; -- loop proportional gain 2**-GC_KP
-        GC_KI             : integer  := GC_KP + 4;                                                                        -- loop integral gain 2**-GC_KI
+        GC_KP             : integer  := f_default_kp(GC_SAMPLE_WIDTH, GC_SPS, GC_PHASE_WIDTH); -- loop proportional gain 2**-GC_KP
+        GC_KI             : integer  := f_default_ki(GC_KP, GC_SPS);                          -- loop integral gain 2**-GC_KI
         GC_FREQ_LIMIT     : natural  := to_integer(f_nco_step(GC_CCPS, GC_SPS, GC_PHASE_WIDTH)) / 8                       -- s_freq saturates at +-GC_FREQ_LIMIT step LSBs
     );
     port (
@@ -111,13 +112,11 @@ architecture rtl of bpsk_rx is
 
     -- decoded control (combinational)
     signal s_last  : std_logic; -- this sample tick is the last of the current symbol
-    signal s_first : std_logic; -- this sample tick is the first of the current symbol
 
     -- datapath and delay alignment with NCO
-    type signed_array_t is array (C_NCO_LATENCY - 1 downto 0) of signed(GC_SAMPLE_WIDTH - 1 downto 0);
-    signal s_sample_data_dly : signed_array_t                               := (others => (others => '0'));
-    signal s_last_dly        : std_logic_vector(C_NCO_LATENCY - 1 downto 0) := (others => '0');
-    signal s_first_dly       : std_logic_vector(C_NCO_LATENCY - 1 downto 0) := (others => '0');
+    type signed_array_t is array (natural range <>) of signed;
+    signal s_sample_data_dly : signed_array_t(C_NCO_LATENCY - 1 downto 0)(GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
+    signal s_last_dly        : std_logic_vector(C_NCO_LATENCY - 1 downto 0)                             := (others => '0');
 
     -- NCO
     signal s_step_size  : unsigned(C_FREQ_WIDTH - 1 downto 0) := C_STEP_SIZE_Q;
@@ -126,9 +125,13 @@ architecture rtl of bpsk_rx is
     signal s_cos_data   : signed(GC_SAMPLE_WIDTH - 1 downto 0);
 
     -- costas loop
-    signal s_freq        : signed(C_FREQ_WIDTH - 1 downto 0) := (others => '0');
-    signal s_error       : signed(C_ACC_WIDTH - 1 downto 0)  := (others => '0');
-    signal s_error_valid : std_logic                         := '0';
+    signal s_freq          : signed(C_FREQ_WIDTH - 1 downto 0)                                     := (others => '0');
+    signal s_error         : signed(C_ACC_WIDTH - 1 downto 0)                                      := (others => '0');
+    signal s_error_valid   : std_logic                                                             := '0';
+    signal s_sine_prod_dly : signed_array_t(GC_SPS - 1 downto 0)(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
+    signal s_cos_prod_dly  : signed_array_t(GC_SPS - 1 downto 0)(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => (others => '0'));
+    signal s_prod_i        : integer range 0 to GC_SPS - 1                                         := 0;
+    signal s_acc_valid     : std_logic                                                             := '0'; -- high when the moving sums hold a new sample
 
     -- bit decision
     signal s_sine_product     : signed(2 * GC_SAMPLE_WIDTH - 1 downto 0) := (others => '0');
@@ -138,7 +141,6 @@ architecture rtl of bpsk_rx is
     signal s_decision_done    : std_logic                                := '0'; -- high when s_sine_accumulator and s_cos_accumulator hold a new symbol
     signal s_sine_valid_m     : std_logic                                := '0'; -- registers sine_valid value during multiply stage
     signal s_last_m           : std_logic                                := '0'; -- registers last value during multiply stage
-    signal s_first_m          : std_logic                                := '0'; -- registers first value during multiply stage
 
     -- output 
     signal s_bit_data  : std_logic;
@@ -161,8 +163,6 @@ begin
         severity failure;
 
     s_last <= '1' when (s_count = GC_SPS - 1) else
-        '0';
-    s_first <= '1' when (s_count = 0) else
         '0';
 
     -- control: sample counter.
@@ -210,37 +210,43 @@ begin
     begin
         if rising_edge(clk) then
             s_last_dly  <= s_last_dly(s_last_dly'high - 1 downto 0) & (s_last and sample_valid);
-            s_first_dly <= s_first_dly(s_first_dly'high - 1 downto 0) & (s_first and sample_valid);
         end if;
     end process;
 
-    -- stage 1: multiply. stage 2: accumulate.
-    p_i_decision_data : process (clk)
+    -- stage 1: multiply. stage 2: moving sum over the last GC_SPS products (ring buffer: add the new
+    -- product, subtract the one GC_SPS samples old). At the last sample of a symbol it is that symbol's correlation.
+    p_i_decision_data : process (clk, reset)
     begin
-        if rising_edge(clk) then
-            s_sine_product <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
-
+        if reset = '1' then
+            s_sine_prod_dly    <= (others => (others => '0'));
+            s_sine_accumulator <= (others => '0');
+            s_prod_i           <= 0;
+            s_acc_valid           <= '0';
+        elsif rising_edge(clk) then
+            s_sine_product            <= s_sample_data_dly(s_sample_data_dly'high) * s_sine_data;
+            s_acc_valid <= s_sine_valid_m;
             if s_sine_valid_m = '1' then
-                if s_first_m = '1' then
-                    s_sine_accumulator <= resize(s_sine_product, s_sine_accumulator'length);
+                s_sine_prod_dly(s_prod_i) <= s_sine_product;
+                s_sine_accumulator        <= s_sine_accumulator + s_sine_product - s_sine_prod_dly(s_prod_i);
+                if s_prod_i = GC_SPS - 1 then -- explicit wrap: no mod logic when GC_SPS is not a power of two
+                    s_prod_i <= 0;
                 else
-                    s_sine_accumulator <= s_sine_accumulator + s_sine_product;
+                    s_prod_i <= s_prod_i + 1;
                 end if;
             end if;
         end if;
     end process;
 
-    p_q_decision_data : process (clk)
+    p_q_decision_data : process (clk, reset)
     begin
-        if rising_edge(clk) then
-            s_cos_product <= s_sample_data_dly(s_sample_data_dly'high) * s_cos_data;
-
+        if reset = '1' then
+            s_cos_prod_dly    <= (others => (others => '0'));
+            s_cos_accumulator <= (others => '0');
+        elsif rising_edge(clk) then
+            s_cos_product            <= s_sample_data_dly(s_sample_data_dly'high) * s_cos_data;
             if s_sine_valid_m = '1' then
-                if s_first_m = '1' then
-                    s_cos_accumulator <= resize(s_cos_product, s_cos_accumulator'length);
-                else
-                    s_cos_accumulator <= s_cos_accumulator + s_cos_product;
-                end if;
+                s_cos_prod_dly(s_prod_i) <= s_cos_product;
+                s_cos_accumulator        <= s_cos_accumulator + s_cos_product - s_cos_prod_dly(s_prod_i);
             end if;
         end if;
     end process;
@@ -256,7 +262,7 @@ begin
             s_step_size   <= C_STEP_SIZE_Q;
             s_error_valid <= '0';
         elsif rising_edge(clk) then
-            if s_decision_done = '1' then
+            if s_acc_valid = '1' then
                 -- stage 1: compute e
                 if s_sine_accumulator(s_sine_accumulator'high) = '0' then -- I >= 0
                     s_error <= s_cos_accumulator;
@@ -265,7 +271,7 @@ begin
                 end if;
             end if;
 
-            s_error_valid <= s_decision_done;
+            s_error_valid <= s_acc_valid;
             if s_error_valid = '1' then
                 -- stage 2: integral path, accumulated with C_FRAC_WIDTH fraction bits, saturated at +-GC_FREQ_LIMIT
                 v_i_term := f_scale(s_error, GC_KI - C_FRAC_WIDTH, C_FREQ_WIDTH);
@@ -292,12 +298,10 @@ begin
             s_decision_done <= '0';
             s_sine_valid_m  <= '0';
             s_last_m        <= '0';
-            s_first_m       <= '0';
         elsif rising_edge(clk) then
             -- stage 1: ctrl and data for multiply stage (in p_i_decision_data and p_q_decision_data)
             s_sine_valid_m <= s_sine_valid;
             s_last_m       <= s_sine_valid and s_last_dly(s_last_dly'high);
-            s_first_m      <= s_sine_valid and s_first_dly(s_first_dly'high);
 
             -- stage 2: accumulate is done and accmulator holds the symbol correlation
             s_decision_done <= s_sine_valid_m and s_last_m;

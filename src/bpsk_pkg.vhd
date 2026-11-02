@@ -50,6 +50,14 @@ package bpsk_pkg is
     -- default integer trust threshold A**2 / 2 for a given GC_SAMPLE_WIDTH
     function f_default_corr_threshold(sample_width : positive) return positive;
 
+    -- default Costas loop proportional gain shift (2**-kp): about a quarter of the phase error
+    -- corrected per symbol, 2*L + 2*ceil(log2(SPS)) - N + 1
+    function f_default_kp(sample_width : positive; sps : positive; phase_width : positive) return integer;
+
+    -- default Costas loop integral gain shift (2**-ki): kp + 4 (near critical damping), plus
+    -- ceil(log2(SPS)) since the integral path updates every sample instead of once per symbol
+    function f_default_ki(kp : integer; sps : positive) return integer;
+
     -- asserts Nyquist (2 * ccps < sps) and an exact NCO step; returns true
     function f_check_carrier(ccps : positive; sps : positive; phase_width : positive) return boolean;
 
@@ -81,6 +89,16 @@ package body bpsk_pkg is
     function f_default_corr_threshold(sample_width : positive) return positive is
     begin
         return ((2 ** (sample_width - 1) - 1)) ** 2 / 2; -- sample_width < 3 gives 0: out of range for positive
+    end function;
+
+    function f_default_kp(sample_width : positive; sps : positive; phase_width : positive) return integer is
+    begin
+        return 2 * sample_width + 2 * integer(ceil(log2(real(sps)))) - phase_width + 1;
+    end function;
+
+    function f_default_ki(kp : integer; sps : positive) return integer is
+    begin
+        return kp + 4 + integer(ceil(log2(real(sps))));
     end function;
 
     function f_check_carrier(ccps : positive; sps : positive; phase_width : positive) return boolean is
